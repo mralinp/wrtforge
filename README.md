@@ -165,6 +165,16 @@ Asked as a multi-select (or `--with passwall2,wireguard,...`; `--with none` for 
 
 Without a file or server, an extra is only installed and you finish it in LuCI. Your keys and configs travel over SSH only and are never printed. Combining a full-tunnel VPN (`AllowedIPs = 0.0.0.0/0`) with Passwall2 makes both fight over the default route; pick one for the whole LAN.
 
+## Benchmark
+
+Compare routers, or one router with and without Passwall2, using the same test:
+
+```bash
+wrtforge 192.168.1.1 --bench --label mx5300-passwall-off
+```
+
+It measures download, upload and latency from your machine **through that router** (so your internet must go through it), samples the router's CPU over SSH during each transfer, and prints a markdown row. Results are appended to `wrtforge-bench.csv` (`--bench-out`). The median of `--rounds` (default 3) transfers of `--secs` (default 10) seconds is reported. The speed endpoint is Cloudflare's public one; nothing is installed on the router.
+
 ## Backups
 
 Each run writes `~/wrtforge-backups/<board>-<time>/` with `config-backup.tar.gz`, `device-info.txt` (release, partition table, package list) and raw copies of the small flash partitions (bootloader, U-Boot env, Wi-Fi calibration `art`). That calibration data cannot be recreated if lost. **The folder contains your Wi-Fi passwords and keys**, so it is created private (`700`); keep it that way.
