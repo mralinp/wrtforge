@@ -47,7 +47,7 @@ Connect your laptop to the router with a **LAN cable**, and keep **Wi-Fi (or any
 | **Backup & recovery** | *Before* anything is flashed: saves your config, package list, and the bootloader and Wi-Fi calibration partitions to `~/wrtforge-backups/` (every partition verified by hash). Dual-slot devices keep the old firmware as the recovery path; single-slot devices also get the official factory image saved for USB/TFTP recovery. |
 | **Flash** | Downloads the latest stable official image for that board, verifies its sha256, runs `sysupgrade`. |
 | **Keep** | Carries over only what you choose: SSH keys, root password, optionally LAN/Wi-Fi/DHCP and your Passwall2 config. |
-| **Passwall2** | Installs it from the official feeds (`apk` on 25.12+, `opkg` before), with `dnsmasq-full` and the dependencies it forgets (xray-core, tproxy modules…). |
+| **Extras** | Pick any of **Passwall2**, **WireGuard**, **OpenVPN** and an **SSH tunnel** (see below). Passwall2 is the default; the rest are opt-in. |
 | **Recovery slot** | Once the new system works, replaces the old firmware in the second slot with the official image, verified by hash. |
 
 ```
@@ -74,7 +74,8 @@ Connect your laptop to the router with a **LAN cable**, and keep **Wi-Fi (or any
   ✔ Image accepted by sysupgrade; flashing and rebooting
   ✔ Router is back
 
-  Passwall2
+  Extras
+  ✔ WireGuard is up, handshake verified
   ✔ Passwall2 installed and running
 
   Recovery slot
@@ -93,11 +94,26 @@ Connect your laptop to the router with a **LAN cable**, and keep **Wi-Fi (or any
 
 ```
 wrtforge [HOST] [--no-scan] [-u USER] [-p PORT] [--auth key|password|copy-key]
-         [--release 25.12.5] [--no-passwall] [--no-fallback]
-         [--backup-dir DIR] [--dry-run] [-y [--go]]
+         [--release 25.12.5] [--with passwall2,wireguard,openvpn,ssh-tunnel|none]
+         [--wireguard-conf FILE] [--openvpn-conf FILE]
+         [--ssh-tunnel USER@HOST[:PORT]] [--tunnel-lan]
+         [--no-fallback] [--backup-dir DIR] [--dry-run] [-y [--go]]
 ```
 
 `-y` accepts every default, handy for scripts. Pass the address and `--auth` with it. The final "flash now?" still needs a real yes, so scripts add `--go`.
+
+## Extras: Passwall2, WireGuard, OpenVPN, SSH tunnel
+
+Asked as a multi-select (or `--with passwall2,wireguard,...`; `--with none` for a plain OpenWrt). Anything that needs a file or a server is read and checked **before** the router is flashed.
+
+| Extra | What it does |
+|---|---|
+| **Passwall2** | Official feeds, `dnsmasq-full` and the dependencies Passwall2 forgets (xray-core, tproxy modules…). |
+| **WireGuard** | Installs `wireguard-tools` + LuCI support. With `--wireguard-conf client.conf` it creates the interface and peers, puts it in the `wan` firewall zone, and waits for a handshake. **If there is none within 25 s it rolls everything back**, so a bad config cannot leave your LAN offline. |
+| **OpenVPN** | Installs `openvpn-openssl` + LuCI support. With `--openvpn-conf profile.ovpn` it creates the `tun0` interface, starts the client and waits for the tunnel; rolls back if it does not come up. Profiles that ask for a username/password need a credentials file, and wrtforge warns you. |
+| **SSH tunnel** | Installs `sshtunnel` + the OpenSSH client, creates a key on the router, optionally authorizes it on your server from your laptop, and runs a SOCKS5 proxy on port 1080 (`--tunnel-lan` shares it with the LAN; otherwise only the router can use it, e.g. as a SOCKS node in Passwall2). |
+
+Without a file or server, an extra is only installed and you finish it in LuCI. Your keys and configs travel over SSH only and are never printed. Combining a full-tunnel VPN (`AllowedIPs = 0.0.0.0/0`) with Passwall2 makes both fight over the default route; pick one for the whole LAN.
 
 ## Backups
 
@@ -115,7 +131,7 @@ wrtforge works on a router that already runs OpenWrt. The Google Wifi ships with
 
 ## Good to know
 
-- Your Passwall2 nodes are not in this repo. They only move from the router's own `/etc/config/passwall2` to the new firmware, and only if you say yes.
+- Your Passwall2 nodes, VPN keys and profiles are not in this repo. They only move from the router's own `/etc/config/passwall2` to the new firmware, and only if you say yes.
 - Expect the router to be offline for about 5 to 15 minutes. The old settings are not kept except what you chose.
 - Host keys are trusted on first contact each run, which is fine on a LAN you control.
 - Image selection, backup and Passwall2 are generic. The second-slot writer knows the Linksys MX layout (`alt_kernel` / `alt_rootfs`) and is skipped on other devices.

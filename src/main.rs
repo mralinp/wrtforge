@@ -5,12 +5,14 @@ mod owrt;
 mod ssh;
 mod steps;
 mod ui;
+mod vpn;
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use console::style;
 use ssh::{Auth, Router};
 use std::path::PathBuf;
+use vpn::{Extra, Extras, Setup};
 
 #[derive(Parser)]
 #[command(
@@ -30,7 +32,23 @@ struct Cli {
     /// OpenWrt release to install (default: latest stable)
     #[arg(long)]
     release: Option<String>,
+    /// Extras to set up, comma separated (default: passwall2). `none` for nothing
+    #[arg(long, value_enum, value_delimiter = ',')]
+    with: Vec<Extra>,
+    /// WireGuard client config (.conf) to import; implies --with wireguard
     #[arg(long)]
+    wireguard_conf: Option<PathBuf>,
+    /// OpenVPN client profile (.ovpn) to import; implies --with openvpn
+    #[arg(long)]
+    openvpn_conf: Option<PathBuf>,
+    /// SSH server for a SOCKS5 tunnel (user@host[:port]); implies --with ssh-tunnel
+    #[arg(long)]
+    ssh_tunnel: Option<String>,
+    /// Share the SSH tunnel's SOCKS5 proxy (port 1080) with the LAN, not just the router
+    #[arg(long)]
+    tunnel_lan: bool,
+    /// Same as leaving passwall2 out of --with
+    #[arg(long, hide = true)]
     no_passwall: bool,
     /// Keep the old firmware in the second slot (skip the final refresh)
     #[arg(long)]
@@ -162,11 +180,14 @@ fn run(cli: Cli) -> Result<()> {
     let (mut carry_net, mut carry_pw) = (false, false);
     if !cli.dry_run {
         ui::head("Plan");
+    }
+    let extras = choose_extras(&cli)?;
+    if !cli.dry_run {
         carry_net = ui::confirm(
             "Carry over LAN/Wi-Fi/DHCP settings? (keeps the router reachable)",
             true,
         )?;
-        if d.had_pw2 && !cli.no_passwall {
+        if d.had_pw2 && extras.passwall {
             carry_pw = ui::confirm("Carry over your existing Passwall2 config?", true)?;
         }
     }
@@ -176,15 +197,7 @@ fn run(cli: Cli) -> Result<()> {
         if carry_net { ", network/Wi-Fi" } else { "" },
         if carry_pw { ", Passwall2" } else { "" }
     );
-    let pw_line = if cli.no_passwall {
-        "Passwall2: skipped".to_string()
-    } else {
-        format!(
-            "Passwall2: install from official feeds ({})",
-            if d.apk { "apk" } else { "opkg" }
-        )
-    };
-    for line in [
+    let mut plan = vec![
         format!(
             "back up config, package list and bootloader/calibration partitions to {}",
             bdir.display()
@@ -192,16 +205,17 @@ fn run(cli: Cli) -> Result<()> {
         format!("recovery: {recovery}"),
         format!("flash OpenWrt {ver} (currently {})", d.release),
         keep,
-        pw_line,
-        format!(
-            "recovery slot: {}",
-            if slot {
-                "afterwards replace the old firmware with the official image"
-            } else {
-                "n/a"
-            }
-        ),
-    ] {
+    ];
+    plan.extend(extras.lines(d.apk));
+    plan.push(format!(
+        "recovery slot: {}",
+        if slot {
+            "afterwards replace the old firmware with the official image"
+        } else {
+            "n/a"
+        }
+    ));
+    for line in plan {
         println!("    {} {line}", style("•").dim());
     }
     if cli.dry_run {
@@ -267,18 +281,9 @@ fn run(cli: Cli) -> Result<()> {
     }
     ui::info(&format!("now running {} {}", now.distro, now.release));
 
-    if !cli.no_passwall {
-        ui::head("Passwall2");
-        let s = ui::Step::new("Installing Passwall2 from the official feeds");
-        let res = steps::passwall(&r, &now)?;
-        let running = res.iter().any(|w| w == "RUNNING");
-        s.done(&format!(
-            "Passwall2 installed{}",
-            if running { " and running" } else { "" }
-        ));
-        if !running {
-            ui::info("open LuCI -> Services -> Passwall 2, add your node, enable it");
-        }
+    if extras.passwall || extras.wireguard.on() || extras.openvpn.on() || extras.ssh.on() {
+        ui::head("Extras");
+        vpn::apply(&r, &now, &extras)?;
     }
 
     if slot {
@@ -310,6 +315,126 @@ fn run(cli: Cli) -> Result<()> {
         .dim()
     );
     Ok(())
+}
+
+/// Which extras to set up. Inputs (config files, server) are read and validated now, before anything is flashed.
+fn choose_extras(cli: &Cli) -> Result<Extras> {
+    let interactive = !cli.yes && !cli.dry_run;
+    let mut sel: Vec<Extra> = cli
+        .with
+        .iter()
+        .copied()
+        .filter(|e| *e != Extra::None)
+        .collect();
+    let mut add = |e: Extra, on: bool| {
+        if on && !sel.contains(&e) {
+            sel.push(e);
+        }
+    };
+    add(Extra::Wireguard, cli.wireguard_conf.is_some());
+    add(Extra::Openvpn, cli.openvpn_conf.is_some());
+    add(Extra::SshTunnel, cli.ssh_tunnel.is_some());
+    if cli.with.is_empty() && sel.is_empty() {
+        if interactive {
+            let items = [
+                "Passwall2 (transparent proxy with xray)",
+                "WireGuard",
+                "OpenVPN",
+                "SSH tunnel (SOCKS5 over ssh)",
+            ]
+            .map(String::from);
+            let all = [
+                Extra::Passwall2,
+                Extra::Wireguard,
+                Extra::Openvpn,
+                Extra::SshTunnel,
+            ];
+            let defaults = [!cli.no_passwall, false, false, false];
+            for i in ui::multi(
+                "Which extras should I set up? (space toggles, enter confirms)",
+                &items,
+                &defaults,
+            )? {
+                sel.push(all[i]);
+            }
+        } else if !cli.no_passwall {
+            sel.push(Extra::Passwall2);
+        }
+    }
+    if cli.no_passwall {
+        sel.retain(|e| *e != Extra::Passwall2);
+    }
+    let has = |e: Extra| sel.contains(&e);
+
+    let file_or_ask = |flag: &Option<PathBuf>, q: &str| -> Result<Option<PathBuf>> {
+        match flag {
+            Some(p) => Ok(Some(p.clone())),
+            None if interactive => {
+                let a = ui::ask(q, "")?;
+                Ok((!a.trim().is_empty()).then(|| PathBuf::from(a.trim().trim_matches('"'))))
+            }
+            None => Ok(None),
+        }
+    };
+    let wireguard = if !has(Extra::Wireguard) {
+        Setup::Off
+    } else {
+        match file_or_ask(
+            &cli.wireguard_conf,
+            "WireGuard client config file (.conf), empty to set it up later in LuCI",
+        )? {
+            Some(p) => Setup::Configure(vpn::parse_wg(
+                &std::fs::read_to_string(&p)
+                    .with_context(|| format!("cannot read {}", p.display()))?,
+            )?),
+            None => Setup::Install,
+        }
+    };
+    let openvpn = if !has(Extra::Openvpn) {
+        Setup::Off
+    } else {
+        match file_or_ask(
+            &cli.openvpn_conf,
+            "OpenVPN profile (.ovpn), empty to set it up later in LuCI",
+        )? {
+            Some(p) => {
+                let text = std::fs::read_to_string(&p)
+                    .with_context(|| format!("cannot read {}", p.display()))?;
+                vpn::check_ovpn(&text)?;
+                if vpn::ovpn_needs_credentials(&text) {
+                    ui::warn("this profile asks for a username/password (auth-user-pass); point it at a credentials file, or it cannot connect unattended");
+                }
+                Setup::Configure(text)
+            }
+            None => Setup::Install,
+        }
+    };
+    let ssh = if !has(Extra::SshTunnel) {
+        Setup::Off
+    } else {
+        let target = match &cli.ssh_tunnel {
+            Some(t) => Some(t.clone()),
+            None if interactive => Some(ui::ask(
+                "SSH server for the tunnel (user@host[:port]), empty to set it up later in LuCI",
+                "",
+            )?)
+            .filter(|t| !t.trim().is_empty()),
+            None => None,
+        };
+        match target {
+            Some(t) => {
+                let lan = cli.tunnel_lan || (interactive && ui::confirm("Share the SOCKS5 proxy with your whole LAN? (otherwise only the router can use it)", false)?);
+                Setup::Configure(vpn::parse_target(t.trim(), lan)?)
+            }
+            None => Setup::Install,
+        }
+    };
+    Ok(Extras {
+        passwall: has(Extra::Passwall2),
+        wireguard,
+        openvpn,
+        ssh,
+    })
 }
 
 fn dirs_cache() -> PathBuf {

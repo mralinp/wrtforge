@@ -49,7 +49,9 @@ impl Router {
         } else {
             PathBuf::from("/tmp")
         };
-        let dir = base.join(format!("wf-{}", std::process::id()));
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = base.join(format!("wf-{}-{n}", std::process::id()));
         fsx::private_dir(&dir)?;
         Ok(Router {
             host: host.into(),
