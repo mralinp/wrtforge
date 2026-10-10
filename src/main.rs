@@ -120,7 +120,7 @@ fn run(cli: Cli) -> Result<()> {
         || (!cli.dry_run && {
             let items = [
                 "Fresh OpenWrt flash + recovery (and extras)",
-                "Benchmark: measure speed and CPU through this router",
+                "Benchmark: measure speed and CPU on this router",
             ]
             .map(String::from);
             ui::choose("What do you want to do?", &items, 0)? == 1

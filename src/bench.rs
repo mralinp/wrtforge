@@ -1,15 +1,13 @@
-//! `--bench`: measure throughput through the router from this machine, plus the router's CPU load.
-//! Uses Cloudflare's public speed endpoints so there is no external speedtest binary to install.
+//! `--bench`: measure throughput from the router itself (download, upload, latency) plus its CPU load.
+//! The transfers run on the router over SSH with its own `uclient-fetch`, against Cloudflare's public
+//! speed endpoints, so nothing is installed and the laptop's network is irrelevant.
 use crate::{owrt::Device, ssh::Router, ui};
 use anyhow::{Context, Result};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
-use std::time::{Duration, Instant};
 
-const DOWN: &str = "https://speed.cloudflare.com/__down?bytes=";
-const UP: &str = "https://speed.cloudflare.com/__up";
-const STREAMS: usize = 4;
+const URL: &str = "https://speed.cloudflare.com/__";
+const STREAMS: u32 = 4;
 
 /// Busy fraction (0..100) between two `/proc/stat` "cpu" lines.
 fn cpu_busy(a: &str, b: &str) -> f64 {
@@ -42,62 +40,55 @@ fn stat(r: &Router) -> Result<String> {
     r.sh("head -n1 /proc/stat")
 }
 
-/// Run `STREAMS` parallel transfers for `secs`; returns Mbps counted over completed requests.
-fn transfer(secs: u64, up: bool) -> f64 {
-    let bytes = AtomicU64::new(0);
-    let start = Instant::now();
-    let end = start + Duration::from_secs(secs);
-    std::thread::scope(|s| {
-        for _ in 0..STREAMS {
-            s.spawn(|| {
-                let agent = ureq::AgentBuilder::new()
-                    .timeout(Duration::from_secs(30))
-                    .build();
-                let body = vec![0u8; 4_000_000];
-                let mut sink = [0u8; 65536];
-                while Instant::now() < end {
-                    let n = if up {
-                        agent.post(UP).send_bytes(&body).map(|_| body.len() as u64)
-                    } else {
-                        agent.get(&format!("{DOWN}25000000")).call().map(|r| {
-                            let mut rd = r.into_reader();
-                            let mut n = 0u64;
-                            while let Ok(k) = rd.read(&mut sink) {
-                                if k == 0 {
-                                    break;
-                                }
-                                n += k as u64;
-                            }
-                            n
-                        })
-                    };
-                    match n {
-                        Ok(n) => {
-                            bytes.fetch_add(n, Relaxed);
-                        }
-                        Err(_) => break,
-                    }
-                }
-            });
-        }
-    });
-    bytes.load(Relaxed) as f64 * 8.0 / start.elapsed().as_secs_f64() / 1e6
+/// Router-side parallel transfer for `secs`; prints Mbps counted over completed requests.
+fn transfer(r: &Router, secs: u64, up: bool) -> Result<f64> {
+    let (prep, work) = if up {
+        (
+            "head -c 4000000 /dev/zero > /tmp/wf.up",
+            format!(
+                "uclient-fetch -q -O /dev/null --post-file=/tmp/wf.up \"{URL}up\" 2>/dev/null || break; n=$((n+4000000))"
+            ),
+        )
+    } else {
+        (
+            ":",
+            format!(
+                "b=$(uclient-fetch -q -O - \"{URL}down?bytes=5000000\" 2>/dev/null | wc -c); [ \"$b\" -gt 0 ] || break; n=$((n+b))"
+            ),
+        )
+    };
+    let script = format!(
+        r#"{prep}
+now() {{ cut -d' ' -f1 /proc/uptime; }}
+t0=$(now); end=$(awk -v t=$t0 -v s={secs} 'BEGIN{{print t+s}}')
+rm -f /tmp/wf.n.*
+for i in $(seq {STREAMS}); do (
+  n=0
+  while awk -v a="$(now)" -v e=$end 'BEGIN{{exit !(a<e)}}'; do {work}; done
+  echo $n > /tmp/wf.n.$i
+) & done
+wait
+t1=$(now)
+cat /tmp/wf.n.* | awk -v a=$t0 -v b=$t1 '{{s+=$1}} END{{printf "%.1f\n", s*8/(b-a)/1e6}}'
+rm -f /tmp/wf.n.* /tmp/wf.up"#
+    );
+    r.sh(&script)?
+        .trim()
+        .parse()
+        .context("bad speed result from the router")
 }
 
-fn latency_ms() -> Result<f64> {
-    let agent = ureq::agent();
-    let url = format!("{DOWN}0");
-    agent
-        .get(&url)
-        .call()
-        .context("cannot reach the speed test server")?; // warm the connection
-    let mut v = vec![];
-    for _ in 0..7 {
-        let t = Instant::now();
-        agent.get(&url).call()?;
-        v.push(t.elapsed().as_secs_f64() * 1e3);
-    }
-    Ok(median(&mut v))
+/// Median time (ms) of a tiny HTTPS request made from the router.
+fn latency_ms(r: &Router) -> Result<f64> {
+    r.sh(&format!(
+        r#"now() {{ cut -d' ' -f1 /proc/uptime; }}
+for i in 1 2 3 4 5 6 7 8; do a=$(now); uclient-fetch -q -O /dev/null "{URL}down?bytes=0" || exit 1; b=$(now)
+awk -v a=$a -v b=$b 'BEGIN{{print (b-a)*1000}}'; done | tail -n 7 | sort -n | sed -n 4p"#
+    ))
+    .context("the router cannot reach the speed test server")?
+    .trim()
+    .parse()
+    .context("bad latency from the router")
 }
 
 pub fn run(
@@ -113,7 +104,7 @@ pub fn run(
         .trim()
         .to_string();
     ui::info(&format!(
-        "{} on OpenWrt {}, active tunnel: {pw}. This machine must reach the internet THROUGH this router.",
+        "{} on OpenWrt {}, active tunnel: {pw}.",
         d.model, d.release
     ));
     let label = label.map_or_else(
@@ -121,15 +112,15 @@ pub fn run(
         String::from,
     );
     let (mut dl, mut ul, mut cd, mut cu) = (vec![], vec![], vec![], vec![]);
-    let ping = latency_ms()?;
+    let ping = latency_ms(r)?;
     for i in 1..=rounds {
         let s = ui::Step::new(&format!("Round {i}/{rounds}: download {secs}s"));
         let a = stat(r)?;
-        let x = transfer(secs, false);
+        let x = transfer(r, secs, false)?;
         let b = stat(r)?;
         s.done(&format!("{x:.0} Mbps"));
         let s = ui::Step::new(&format!("Round {i}/{rounds}: upload {secs}s"));
-        let y = transfer(secs, true);
+        let y = transfer(r, secs, true)?;
         let c = stat(r)?;
         s.done(&format!("{y:.0} Mbps"));
         dl.push(x);
@@ -144,7 +135,7 @@ pub fn run(
         median(&mut cu),
     );
     println!(
-        "\n| label | router | OpenWrt | passwall | down Mbps | up Mbps | ping ms | cpu% down | cpu% up |\n|---|---|---|---|---|---|---|---|---|\n| {label} | {} | {} | {pw} | {dl:.0} | {ul:.0} | {ping:.0} | {cd:.0} | {cu:.0} |\n",
+        "\n| label | router | OpenWrt | passwall | down Mbps | up Mbps | http ms | cpu% down | cpu% up |\n|---|---|---|---|---|---|---|---|---|\n| {label} | {} | {} | {pw} | {dl:.0} | {ul:.0} | {ping:.0} | {cd:.0} | {cu:.0} |\n",
         d.model, d.release
     );
     let new = !out.exists();
@@ -155,7 +146,7 @@ pub fn run(
     if new {
         writeln!(
             f,
-            "label,router,openwrt,passwall,down_mbps,up_mbps,ping_ms,cpu_down,cpu_up"
+            "label,router,openwrt,passwall,down_mbps,up_mbps,http_ms,cpu_down,cpu_up"
         )?;
     }
     writeln!(

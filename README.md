@@ -175,7 +175,7 @@ Pick **Benchmark** in the menu that appears after you choose the router, or skip
 wrtforge 192.168.1.1 --bench --label mx5300-baseline
 ```
 
-It measures download, upload and latency from your machine **through that router** (so your internet must go through it), samples the router's CPU over SSH during each transfer, and prints a markdown row. Results are appended to `wrtforge-bench.csv` (`--bench-out`). The median of `--rounds` (default 3) transfers of `--secs` (default 10) seconds is reported. The speed endpoint is Cloudflare's public one; nothing is installed on the router.
+It runs the test **on the router** over SSH (its own `uclient-fetch` against Cloudflare's public speed endpoints; nothing is installed), so it works from any machine that can reach the router. It measures download, upload and HTTPS latency, samples the router's CPU during each transfer, and prints a markdown row. Results are appended to `wrtforge-bench.csv` (`--bench-out`). The median of `--rounds` (default 3) transfers of `--secs` (default 10) seconds is reported. Note the transfer itself uses router CPU, and router-originated traffic only goes through Passwall2 if its "localhost proxy" option is on.
 
 ## Backups
 
