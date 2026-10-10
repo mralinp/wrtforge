@@ -69,9 +69,9 @@ struct Cli {
     /// Benchmark throughput through this router instead of flashing it
     #[arg(long)]
     bench: bool,
-    /// Name of this benchmark run, e.g. gale-passwall-on
-    #[arg(long, default_value = "run")]
-    label: String,
+    /// Name of this benchmark run (default: <board>-<active tunnel>)
+    #[arg(long)]
+    label: Option<String>,
     /// Benchmark rounds (the median is reported) and seconds per transfer
     #[arg(long, default_value_t = 3)]
     rounds: u32,
@@ -119,7 +119,7 @@ fn run(cli: Cli) -> Result<()> {
     let bench = cli.bench
         || (!cli.dry_run && {
             let items = [
-                "Forge: flash OpenWrt and set up extras",
+                "Fresh OpenWrt flash + recovery (and extras)",
                 "Benchmark: measure speed and CPU through this router",
             ]
             .map(String::from);
@@ -167,7 +167,7 @@ fn run(cli: Cli) -> Result<()> {
         return bench::run(
             &r,
             &d,
-            &ui::ask("Name for this run", &cli.label)?,
+            cli.label.as_deref(),
             cli.rounds.max(1),
             cli.secs.max(1),
             &cli.bench_out,

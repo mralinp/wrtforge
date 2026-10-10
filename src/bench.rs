@@ -100,15 +100,26 @@ fn latency_ms() -> Result<f64> {
     Ok(median(&mut v))
 }
 
-pub fn run(r: &Router, d: &Device, label: &str, rounds: u32, secs: u64, out: &Path) -> Result<()> {
+pub fn run(
+    r: &Router,
+    d: &Device,
+    label: Option<&str>,
+    rounds: u32,
+    secs: u64,
+    out: &Path,
+) -> Result<()> {
     let pw = r
-        .sh("pgrep xray >/dev/null || pgrep sing-box >/dev/null && echo on || echo off")?
+        .sh("m=''; pgrep xray >/dev/null || pgrep sing-box >/dev/null && m=passwall2\n[ -n \"$(wg show interfaces 2>/dev/null)\" ] && m=\"${m:+$m+}wireguard\"\npgrep openvpn >/dev/null && m=\"${m:+$m+}openvpn\"\necho \"${m:-none}\"")?
         .trim()
         .to_string();
     ui::info(&format!(
-        "{} on OpenWrt {}, passwall core: {pw}. This machine must reach the internet THROUGH this router.",
+        "{} on OpenWrt {}, active tunnel: {pw}. This machine must reach the internet THROUGH this router.",
         d.model, d.release
     ));
+    let label = label.map_or_else(
+        || format!("{}-{pw}", d.board.replace(',', "_")),
+        String::from,
+    );
     let (mut dl, mut ul, mut cd, mut cu) = (vec![], vec![], vec![], vec![]);
     let ping = latency_ms()?;
     for i in 1..=rounds {
