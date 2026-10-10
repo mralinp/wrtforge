@@ -10,6 +10,7 @@ set -eu
 R=${1:?router ip}; ENVF=${2:?params.env}; SECS=${3:-30}; REPS=${4:-3}; shift 4 2>/dev/null || shift $#
 SCEN=${*:-nat vless-tcp vless-tls ss-aes ss-chacha}
 . "$ENVF"
+PIN=$(openssl x509 -in "$(dirname "$ENVF")/cert.pem" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':' | tr A-F a-f)
 local_ip() { { ifconfig 2>/dev/null || ip -4 addr; } | grep -qE "inet $SERVER_IP([ /]|$)"; }
 if local_ip; then
   case " $SCEN " in *" nat "*) echo "server is this machine: skipping the nat baseline (needs a second machine)"; SCEN=${SCEN/nat/};; esac
@@ -40,7 +41,7 @@ setnode() { # $1 = scenario
                  uci set passwall2.wfbench.encryption=none; uci set passwall2.wfbench.transport=raw; uci set passwall2.wfbench.tls=0 ;;
       vless-tls) uci set passwall2.wfbench.port=10002; uci set passwall2.wfbench.protocol=vless; uci set passwall2.wfbench.uuid=$UUID
                  uci set passwall2.wfbench.encryption=none; uci set passwall2.wfbench.transport=raw; uci set passwall2.wfbench.tls=1
-                 uci set passwall2.wfbench.tls_allowInsecure=1; uci set passwall2.wfbench.tls_serverName=wrtbench ;;
+                 uci set passwall2.wfbench.tls_pinSHA256=$PIN; uci set passwall2.wfbench.tls_serverName=wrtbench ;;
       ss-aes)    uci set passwall2.wfbench.port=10003; uci set passwall2.wfbench.protocol=shadowsocks
                  uci set passwall2.wfbench.method=aes-128-gcm; uci set passwall2.wfbench.password='$SSPASS' ;;
       ss-chacha) uci set passwall2.wfbench.port=10004; uci set passwall2.wfbench.protocol=shadowsocks
