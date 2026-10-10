@@ -21,7 +21,7 @@ cat > config.json <<JSON
 { "log": {"loglevel": "warning"},
   "inbounds": [
     {"tag":"vless-tcp","port":10001,"protocol":"vless","settings":{"clients":[{"id":"$UUID"}],"decryption":"none"},"streamSettings":{"network":"tcp"}},
-    {"tag":"vless-tls","port":10002,"protocol":"vless","settings":{"clients":[{"id":"$UUID"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"tls","tlsSettings":{"certificates":[{"certificateFile":"cert.pem","keyFile":"key.pem"}]}}},
+    {"tag":"vless-tls","port":10002,"protocol":"vless","settings":{"clients":[{"id":"$UUID"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"tls","tlsSettings":{"certificates":[{"certificateFile":"$PWD/cert.pem","keyFile":"$PWD/key.pem"}]}}},
     {"tag":"ss-aes","port":10003,"protocol":"shadowsocks","settings":{"method":"aes-128-gcm","password":"$SSPASS","network":"tcp,udp"}},
     {"tag":"ss-chacha","port":10004,"protocol":"shadowsocks","settings":{"method":"chacha20-ietf-poly1305","password":"$SSPASS","network":"tcp,udp"}}
   ],
