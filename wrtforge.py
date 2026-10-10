@@ -98,18 +98,31 @@ def warn(msg): print("  %s %s" % (yellow("!"), msg))
 def head(msg): print("\n  " + bold(msg))
 
 
+def _in(prompt):
+    """input() that still works when the script itself arrives on stdin (curl | python3 -)."""
+    if sys.stdin.isatty():
+        return input(prompt)
+    try:
+        with open("/dev/tty", "r+") as tty:
+            tty.write(prompt)
+            tty.flush()
+            return tty.readline().rstrip("\n")
+    except OSError:
+        raise Fail("no terminal to ask questions on; pass the address and --auth, plus -y")
+
+
 def ask(q, default=None):
     if ARGS.yes and default is not None:
         return default
     d = " " + dim("(%s)" % default) if default else ""
-    v = input("  %s %s%s " % (cyan("?"), q, d)).strip()
+    v = _in("  %s %s%s " % (cyan("?"), q, d)).strip()
     return v or default
 
 
 def confirm(q, default=True):
     if ARGS.yes:
         return default
-    v = input("  %s %s %s " % (cyan("?"), q, dim("[Y/n]" if default else "[y/N]"))).strip().lower()
+    v = _in("  %s %s %s " % (cyan("?"), q, dim("[Y/n]" if default else "[y/N]"))).strip().lower()
     return default if not v else v[0] == "y"
 
 
@@ -121,7 +134,7 @@ def choose(q, opts, default=0):
     for i, (_, label) in enumerate(opts, 1):
         print("    %s %s" % (bold(str(i) + "."), label))
     while True:
-        v = input("    %s " % dim("choice [%d]:" % (default + 1))).strip()
+        v = _in("    %s " % dim("choice [%d]:" % (default + 1))).strip()
         if not v:
             return opts[default][0]
         if v.isdigit() and 1 <= int(v) <= len(opts):
@@ -405,22 +418,24 @@ def main(argv=None):
     ARGS.yes = a.yes
 
     banner()
-    host = a.host or ask("Router address", "192.168.1.1")
-    auth = a.auth or choose("How should I log in?", [
-        ("key", "SSH key already authorised on the router"),
-        ("password", "Password " + dim("(ssh asks for it; never stored)")),
-        ("copy-key", "Password once, then install my SSH key " + dim("(no more prompts)"))], 2)
-    r = Router(host, a.user, a.port, auth)
+    r = None
     try:
+        host = a.host or ask("Router address", "192.168.1.1")
+        auth = a.auth or choose("How should I log in?", [
+            ("key", "SSH key already authorised on the router"),
+            ("password", "Password " + dim("(ssh asks for it; never stored)")),
+            ("copy-key", "Password once, then install my SSH key " + dim("(no more prompts)"))], 2)
+        r = Router(host, a.user, a.port, auth)
         run(a, r, host)
     except Fail as e:
         print("\n  %s %s\n" % (red("✖"), e))
         sys.exit(1)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, EOFError):
         print("\n  interrupted; the router is untouched unless the flash already started\n")
         sys.exit(130)
     finally:
-        r.close()
+        if r:
+            r.close()
 
 
 def run(a, r, host):
