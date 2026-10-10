@@ -5,9 +5,12 @@ Stdlib only, Python 3.8+. Credentials are never stored: SSH asks for the
 password itself, or you let wrtforge install your public key.
 """
 import argparse
+import concurrent.futures
 import hashlib
+import ipaddress
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -291,6 +294,76 @@ def network_check(host, a):
             raise Fail("cancelled; connect a second network and run again")
 
 
+def parse_subnets(text):
+    """IPv4 networks from `ifconfig` (macOS/BSD) or `ip -4 -o addr` (Linux) output; /24 cap, no loopback/link-local."""
+    nets = []
+    for ip, hexmask, plen in re.findall(r"inet (\d+\.\d+\.\d+\.\d+)(?: netmask (0x[0-9a-fA-F]+)|/(\d+))", text):
+        prefix = bin(int(hexmask, 16)).count("1") if hexmask else int(plen)
+        net = ipaddress.ip_interface("%s/%d" % (ip, max(prefix, 24))).network
+        if not (net.is_loopback or net.is_link_local) and net not in nets:
+            nets.append(net)
+    return nets
+
+
+def local_subnets():
+    cmd = ["ifconfig"] if sys.platform == "darwin" else ["ip", "-4", "-o", "addr", "show"]
+    try:
+        return parse_subnets(subprocess.run(cmd, capture_output=True, text=True, timeout=5).stdout)
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+
+def classify(banner, html):
+    """Label for a host that answers on SSH: OpenWrt/LuCI page, or a dropbear SSH banner, else None."""
+    t = re.search(r"<title>([^<]*)", html or "", re.I)
+    if re.search(r"luci|openwrt", html or "", re.I):
+        return "OpenWrt (LuCI%s)" % (": " + t.group(1).strip() if t and t.group(1).strip() else "")
+    if "dropbear" in (banner or "").lower():
+        return "likely OpenWrt (dropbear SSH)"
+    return None
+
+
+def probe(ip, port=22):
+    try:
+        with socket.create_connection((ip, port), 0.6) as c:
+            c.settimeout(1.0)
+            try:
+                banner = c.recv(64).decode(errors="replace")
+            except OSError:
+                banner = ""
+    except OSError:
+        return None
+    try:
+        html = urllib.request.urlopen("http://%s/" % ip, timeout=1.5).read(8192).decode(errors="replace")
+    except (OSError, ValueError):
+        html = ""
+    label = classify(banner, html)
+    return (ip, label) if label else None
+
+
+def discover(a):
+    """Scan the networks this laptop is on, return the router address the user picks."""
+    nets = local_subnets()
+    gw = route_info("1.1.1.1")[1]
+    with Step("Scanning %s for OpenWrt routers" % (", ".join(str(n) for n in nets) or "the local network")) as s:
+        hosts = [str(h) for n in nets for h in n.hosts()]
+        for g in ("192.168.1.1", "192.168.0.1", "10.0.0.1"):
+            if g not in hosts:
+                hosts.append(g)
+        with concurrent.futures.ThreadPoolExecutor(64) as ex:
+            found = sorted((x for x in ex.map(probe, hosts) if x), key=lambda x: ipaddress.ip_address(x[0]))
+        s.done("Found %d OpenWrt router%s" % (len(found), "" if len(found) == 1 else "s") if found
+               else "No OpenWrt router found on the local network")
+    if a.yes and len(found) == 1:
+        return found[0][0]
+    if a.yes:
+        raise Fail("cannot pick a router automatically; pass its address")
+    opts = [(ip, "%s  %s%s" % (bold(ip), dim(label), cyan("  ← your gateway") if ip == gw else "")) for ip, label in found]
+    opts.append((None, "Enter an address manually"))
+    pick = choose("Which router should I set up?", opts, 0)
+    return pick or ask("Router address", "192.168.1.1")
+
+
 def backup(r, d, bdir):
     """Everything needed to rebuild: config, package list, small raw flash partitions (bootloader, calibration)."""
     os.makedirs(bdir, mode=0o700)
@@ -478,7 +551,7 @@ def passwall(r, info_):
 # ───────────────────────────── main ─────────────────────────────
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="wrtforge", description=__doc__.splitlines()[0])
-    ap.add_argument("host", nargs="?", help="router address (asked if omitted)")
+    ap.add_argument("host", nargs="?", help="router address (found by scanning the local network if omitted)")
     ap.add_argument("-u", "--user", default="root")
     ap.add_argument("-p", "--port", type=int, default=22)
     ap.add_argument("--auth", choices=["key", "password", "copy-key"], help="how to log in (asked if omitted)")
@@ -486,6 +559,7 @@ def main(argv=None):
     ap.add_argument("--no-passwall", action="store_true")
     ap.add_argument("--no-fallback", action="store_true", help="keep the old firmware in the second slot (skip the final refresh)")
     ap.add_argument("--dry-run", action="store_true", help="inspect and plan only; change nothing")
+    ap.add_argument("--no-scan", action="store_true", help="do not scan the network; just ask for the address")
     ap.add_argument("--go", action="store_true", help="with -y: also answer yes to the final 'flash now?'")
     ap.add_argument("--backup-dir", default=os.path.expanduser("~/wrtforge-backups"))
     ap.add_argument("-y", "--yes", action="store_true", help="accept defaults, no questions")
@@ -495,7 +569,7 @@ def main(argv=None):
     banner()
     r = None
     try:
-        host = a.host or ask("Router address", "192.168.1.1")
+        host = a.host or (ask("Router address", "192.168.1.1") if a.no_scan else discover(a))
         auth = a.auth or choose("How should I log in?", [
             ("key", "SSH key already authorised on the router"),
             ("password", "Password " + dim("(ssh asks for it; never stored)")),

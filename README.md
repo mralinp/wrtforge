@@ -13,7 +13,7 @@ On your laptop (macOS or Linux, Python 3 is already there):
 python3 <(curl -fsSL https://raw.githubusercontent.com/mralinp/wrtforge/main/wrtforge.py)
 ```
 
-That is it. It asks for the router address and how to log in, shows you the plan, and waits for your OK before touching anything.
+That is it. It scans the networks your laptop is on, lists the OpenWrt routers it finds and asks which one, asks how to log in, shows you the plan, and waits for your OK before touching anything.
 
 Want to look first? Add `--dry-run` and nothing is changed:
 
@@ -31,6 +31,7 @@ Connect your laptop to the router with a **LAN cable**, and keep **Wi-Fi (or any
 
 | Step | What happens |
 |---|---|
+| **Discovery** | Scans your local networks for OpenWrt routers (LuCI page or dropbear SSH) and lets you pick one. Or pass the address, or `--no-scan` to type it. |
 | **Network check** | Tells you whether the flash would cut your own internet, and how to avoid it. |
 | **Inspect** | Detects your exact board and OpenWrt target over SSH. |
 | **Backup & recovery** | *Before* anything is flashed: saves your config, package list, and the bootloader and Wi-Fi calibration partitions to `~/wrtforge-backups/` (every partition verified by hash). Dual-slot devices keep the old firmware as the recovery path; single-slot devices also get the official factory image saved for USB/TFTP recovery. |
@@ -41,6 +42,11 @@ Connect your laptop to the router with a **LAN cable**, and keep **Wi-Fi (or any
 
 ```
   ▌wrtforge  v0.1.0
+
+  ✔ Found 2 OpenWrt routers
+  ? Which router should I set up?
+    1. 192.168.1.1  OpenWrt (LuCI)  ← your gateway
+    2. 192.168.1.2  likely OpenWrt (dropbear SSH)
 
   Network
   ✔ two networks: router via en5, internet via en0. You will stay online.
@@ -75,7 +81,7 @@ Connect your laptop to the router with a **LAN cable**, and keep **Wi-Fi (or any
 ## Options
 
 ```
-wrtforge.py [host] [-u USER] [-p PORT] [--auth key|password|copy-key]
+wrtforge.py [host] [--no-scan] [-u USER] [-p PORT] [--auth key|password|copy-key]
             [--version 25.12.5] [--no-passwall] [--no-fallback]
             [--backup-dir DIR] [--dry-run] [-y [--go]]
 ```

@@ -36,6 +36,17 @@ class T(unittest.TestCase):
             {"type": "factory", "filesystem": "squashfs", "name": "f.bin"}]}}}
         self.assertEqual(w.pick_image(p, "google,wifi", "factory")["name"], "f.bin")
 
+    def test_parse_subnets(self):
+        mac = "lo0: inet 127.0.0.1 netmask 0xff000000\nen0: inet 192.168.80.246 netmask 0xffffff00 broadcast 192.168.80.255"
+        lin = "2: eth0    inet 10.1.2.3/16 brd 10.1.255.255 scope global eth0\n1: lo inet 127.0.0.1/8"
+        self.assertEqual([str(n) for n in w.parse_subnets(mac)], ["192.168.80.0/24"])
+        self.assertEqual([str(n) for n in w.parse_subnets(lin)], ["10.1.2.0/24"])
+
+    def test_classify(self):
+        self.assertIn("LuCI", w.classify("", "<title>OpenWrt | Overview</title> luci"))
+        self.assertIn("dropbear", w.classify("SSH-2.0-dropbear_2024.86", ""))
+        self.assertIsNone(w.classify("SSH-2.0-OpenSSH_9.6", "<html>nas</html>"))
+
 
 if __name__ == "__main__":
     unittest.main()
