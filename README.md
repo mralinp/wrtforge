@@ -98,6 +98,7 @@ Connect your laptop to the router with a **LAN cable**, and keep **Wi-Fi (or any
 | **Flash** | Downloads the latest stable official image for that board, verifies its sha256, runs `sysupgrade`. |
 | **Keep** | Carries over only what you choose: SSH keys, root password, optionally LAN/Wi-Fi/DHCP and your Passwall2 config. |
 | **Extras** | Pick any of **Passwall2**, **WireGuard**, **OpenVPN** and an **SSH tunnel** (see below). Passwall2 is the default; the rest are opt-in. |
+| **Benchmark** | From the menu or `--bench`: measures speed and router CPU on the router itself. A full-potential mode (`bench/`) pushes `iperf3` through Passwall2 to find the router's real ceiling, per cipher. See [Benchmark](#benchmark). |
 | **Recovery slot** | Once the new system works, replaces the old firmware in the second slot with the official image, verified by hash. |
 
 ```
@@ -164,6 +165,44 @@ Asked as a multi-select (or `--with passwall2,wireguard,...`; `--with none` for 
 | **SSH tunnel** | Installs `sshtunnel` + the OpenSSH client, creates a key on the router, optionally authorizes it on your server from your laptop, and runs a SOCKS5 proxy on port 1080 (`--tunnel-lan` shares it with the LAN; otherwise only the router can use it, e.g. as a SOCKS node in Passwall2). |
 
 Without a file or server, an extra is only installed and you finish it in LuCI. Your keys and configs travel over SSH only and are never printed. Combining a full-tunnel VPN (`AllowedIPs = 0.0.0.0/0`) with Passwall2 makes both fight over the default route; pick one for the whole LAN.
+
+## Benchmark
+
+Two tools, for two questions.
+
+### Quick speed check (menu or `--bench`)
+
+Pick **Benchmark** in the menu that appears after you choose the router, or skip the menu:
+
+```bash
+wrtforge 192.168.1.1 --bench
+```
+
+It runs the test **on the router** over SSH (its own `uclient-fetch` against Cloudflare's public speed endpoints; nothing is installed). It measures download, upload and HTTPS latency, samples the router's CPU during each transfer, and prints a markdown row. Results are appended to `wrtforge-bench.csv` (`--bench-out`). The run is named `<board>-<active tunnel>` (passwall2, wireguard, openvpn or none); `--label` overrides it. `--rounds` (default 3) and `--secs` (default 10) set the median and transfer length. This measures your real connection, so a slow proxy node or ISP shows up in it. Router-originated traffic only goes through Passwall2 if its "localhost proxy" option is on.
+
+### Full-potential benchmark (`bench/`)
+
+Use this to find what the router itself can do, with no VPS, Cloudflare or ISP in the path: a local Xray server, `iperf3 -P 8` pushed *through* the router's Passwall2, and per-core router CPU. Results from real routers: [Google WiFi (Gale)](reports/gale.md) and [Linksys MX5300](reports/mx5300.md).
+
+What you need:
+- `xray` and `iperf3` on your machine (`brew install xray iperf3`), plus SSH key access to the router as root.
+- **A gigabit Ethernet adapter.** A 100 Mbps one ends every test at about 94 Mbps and hides what the router can do (the reports above hit exactly this).
+- Cabling: the router's WAN to the network your server sits on; your machine on that network as the **server**, and a LAN cable (or Wi-Fi) from your machine to the router as the **client**. A second machine as the server also enables the plain-NAT baseline.
+- Put the cable you use for the client first in your network service order (macOS: System Settings, Network, Set Service Order), or `run.sh` stops with an explanation. If both the cable and Wi-Fi are on the router's network, route the test address through the router.
+
+What to do:
+
+```bash
+bench/server.sh 192.168.70.50                       # your IP on the router's WAN side; leave it running
+bench/run.sh 192.168.1.1 bench-server/params.env    # router LAN IP; default 30 s x 3 reps x all scenarios
+```
+
+Optional arguments: `bench/run.sh <router> <params.env> [secs] [reps] [scenarios...]`, with scenarios `nat`, `vless-tcp`, `vless-tls`, `ss-aes`, `ss-chacha`. Results go to `wrtforge-bench.csv` (`BENCH_OUT` changes it). The router's Passwall2 config is backed up to `/root/passwall2.bench-backup` first and restored on exit, including on Ctrl-C; delete the backup afterwards if you do not want a second copy of your config on the router. Stop the server with Ctrl-C.
+
+How to read it:
+- If throughput **plateaus while no core is near 100%**, the bottleneck is your adapter, cable or Wi-Fi, not the router.
+- If a core is at **90% or more**, that number is the router's ceiling for that tunnel. Compare ciphers: routers without AES instructions (older ARMv7 such as the Gale) are much faster with ChaCha20.
+- To guess a ceiling you could not reach, scale: `measured speed x 95 / busiest-core CPU %`. It is a rough, straight-line estimate; report it as an estimate, never as a measurement.
 
 ## Backups
 

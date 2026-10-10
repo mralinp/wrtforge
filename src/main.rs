@@ -1,4 +1,5 @@
 //! wrtforge: forge a clean, official OpenWrt (+ Passwall2, recovery slot) onto a router over SSH.
+mod bench;
 mod fsx;
 mod net;
 mod owrt;
@@ -65,6 +66,20 @@ struct Cli {
     /// Where backups go (default: ~/wrtforge-backups)
     #[arg(long)]
     backup_dir: Option<PathBuf>,
+    /// Benchmark throughput through this router instead of flashing it
+    #[arg(long)]
+    bench: bool,
+    /// Name of this benchmark run (default: <board>-<active tunnel>)
+    #[arg(long)]
+    label: Option<String>,
+    /// Benchmark rounds (the median is reported) and seconds per transfer
+    #[arg(long, default_value_t = 3)]
+    rounds: u32,
+    #[arg(long, default_value_t = 10)]
+    secs: u64,
+    /// CSV file the benchmark result is appended to
+    #[arg(long, default_value = "wrtforge-bench.csv")]
+    bench_out: PathBuf,
     /// Accept every default, no questions
     #[arg(short, long)]
     yes: bool,
@@ -101,9 +116,21 @@ fn run(cli: Cli) -> Result<()> {
     };
     let mut r = Router::new(&host, &cli.user, cli.port, auth)?;
 
-    ui::head("Network");
-    if !net::network_check(&host, cli.dry_run)? {
-        bail!("cancelled; connect a second network and run again");
+    let bench = cli.bench
+        || (!cli.dry_run && {
+            let items = [
+                "Fresh OpenWrt flash + recovery (and extras)",
+                "Benchmark: measure speed and CPU on this router",
+            ]
+            .map(String::from);
+            ui::choose("What do you want to do?", &items, 0)? == 1
+        });
+
+    if !bench {
+        ui::head("Network");
+        if !net::network_check(&host, cli.dry_run)? {
+            bail!("cancelled; connect a second network and run again");
+        }
     }
 
     ui::head("Connect");
@@ -135,6 +162,17 @@ fn run(cli: Cli) -> Result<()> {
         "running {} {}   {} / {}",
         d.distro, d.release, d.target, d.arch
     ));
+    if bench {
+        ui::head("Benchmark");
+        return bench::run(
+            &r,
+            &d,
+            cli.label.as_deref(),
+            cli.rounds.max(1),
+            cli.secs.max(1),
+            &cli.bench_out,
+        );
+    }
     if !d.sysupgrade {
         bail!("no sysupgrade on the router");
     }

@@ -1,0 +1,5 @@
+router,openwrt,scenario,down_mbps,up_mbps,cpu_avg_down,cpu_maxcore_down,cpu_avg_up,cpu_maxcore_up
+Google WiFi (Gale),25.12.5,vless-tcp,94,94,25,30,84,88
+Google WiFi (Gale),25.12.5,vless-tls,41,42,94,96,95,96
+Google WiFi (Gale),25.12.5,ss-aes,45,44,92,93,92,93
+Google WiFi (Gale),25.12.5,ss-chacha,94,94,56,57,86,87
