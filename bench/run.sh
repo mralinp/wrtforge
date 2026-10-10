@@ -43,9 +43,9 @@ setnode() { # $1 = scenario
                  uci set passwall2.wfbench.encryption=none; uci set passwall2.wfbench.transport=raw; uci set passwall2.wfbench.tls=1
                  uci set passwall2.wfbench.tls_pinSHA256=$PIN; uci set passwall2.wfbench.tls_serverName=wrtbench ;;
       ss-aes)    uci set passwall2.wfbench.port=10003; uci set passwall2.wfbench.protocol=shadowsocks
-                 uci set passwall2.wfbench.method=aes-128-gcm; uci set passwall2.wfbench.password='$SSPASS' ;;
+                 uci set passwall2.wfbench.ss_method=aes-128-gcm; uci set passwall2.wfbench.password='$SSPASS' ;;
       ss-chacha) uci set passwall2.wfbench.port=10004; uci set passwall2.wfbench.protocol=shadowsocks
-                 uci set passwall2.wfbench.method=chacha20-ietf-poly1305; uci set passwall2.wfbench.password='$SSPASS' ;;
+                 uci set passwall2.wfbench.ss_method=chacha20-ietf-poly1305; uci set passwall2.wfbench.password='$SSPASS' ;;
       *) echo unknown scenario; exit 1 ;;
     esac
     uci set passwall2.@global[0].enabled=1; uci set passwall2.@global[0].node=wfbench
