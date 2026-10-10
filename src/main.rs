@@ -1,4 +1,5 @@
 //! wrtforge: forge a clean, official OpenWrt (+ Passwall2, recovery slot) onto a router over SSH.
+mod fsx;
 mod net;
 mod owrt;
 mod ssh;
@@ -94,8 +95,11 @@ fn run(cli: Cli) -> Result<()> {
             cli.user, host
         ));
     }
+    if !ssh::MUX && auth != Auth::Key {
+        ui::info("Windows: your SSH key is installed with this one password prompt; everything else uses the key");
+    }
     r.connect()?;
-    if auth == Auth::CopyKey {
+    if auth == Auth::CopyKey && ssh::MUX {
         let s = ui::Step::new("Installing your SSH public key");
         r.install_key()?;
         s.done("SSH key installed; no more password prompts");
@@ -144,15 +148,15 @@ fn run(cli: Cli) -> Result<()> {
     } else {
         "backup + official factory image saved here for USB/TFTP recovery"
     };
-    let home = std::env::var("HOME").context("HOME is not set")?;
+    let home = fsx::home()?;
     let bdir = cli
         .backup_dir
         .clone()
-        .unwrap_or_else(|| PathBuf::from(home).join("wrtforge-backups"))
+        .unwrap_or_else(|| home.join("wrtforge-backups"))
         .join(format!(
             "{}-{}",
             d.board.replace(',', "_"),
-            steps::timestamp()
+            fsx::timestamp()
         ));
 
     let (mut carry_net, mut carry_pw) = (false, false);
@@ -309,6 +313,7 @@ fn run(cli: Cli) -> Result<()> {
 }
 
 fn dirs_cache() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    PathBuf::from(home).join(".cache/wrtforge")
+    fsx::home()
+        .unwrap_or_else(|_| std::env::temp_dir())
+        .join(".cache/wrtforge")
 }

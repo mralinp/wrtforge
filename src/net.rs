@@ -109,19 +109,54 @@ pub fn parse_subnets(text: &str) -> Vec<(Ipv4Addr, u8)> {
                 )
             }
         };
-        let (Ok(ip), Some(plen)) = (ip_s.parse::<Ipv4Addr>(), plen) else {
-            continue;
-        };
-        if ip.is_loopback() || ip.is_link_local() {
+        if let (Ok(ip), Some(plen)) = (ip_s.parse::<Ipv4Addr>(), plen) {
+            add_net(&mut nets, ip, plen);
+        }
+    }
+    nets
+}
+
+fn add_net(nets: &mut Vec<(Ipv4Addr, u8)>, ip: Ipv4Addr, plen: u32) {
+    if ip.is_loopback() || ip.is_link_local() {
+        return;
+    }
+    let prefix = plen.clamp(24, 30) as u8; // never scan more than a /24
+    let net = (
+        Ipv4Addr::from(u32::from(ip) & (u32::MAX << (32 - prefix))),
+        prefix,
+    );
+    if !nets.contains(&net) {
+        nets.push(net);
+    }
+}
+
+fn quad_after_colon(line: &str) -> Option<Ipv4Addr> {
+    let v = line.split_once(':')?.1.trim();
+    v.chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect::<String>()
+        .parse()
+        .ok()
+}
+
+/// Windows `ipconfig` output. Locale-proof: an "IPv4" line is followed by its mask, the next address starting with 255.
+pub fn parse_ipconfig(text: &str) -> Vec<(Ipv4Addr, u8)> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut nets = vec![];
+    for (i, l) in lines.iter().enumerate() {
+        if !l.contains("IPv4") {
             continue;
         }
-        let prefix = plen.clamp(24, 30) as u8; // never scan more than a /24
-        let net = (
-            Ipv4Addr::from(u32::from(ip) & (u32::MAX << (32 - prefix))),
-            prefix,
-        );
-        if !nets.contains(&net) {
-            nets.push(net);
+        let Some(ip) = quad_after_colon(l) else {
+            continue;
+        };
+        let mask = lines[i + 1..]
+            .iter()
+            .take(2)
+            .filter_map(|l| quad_after_colon(l))
+            .find(|m| m.octets()[0] == 255);
+        if let Some(m) = mask {
+            add_net(&mut nets, ip, u32::from(m).count_ones());
         }
     }
     nets
@@ -177,16 +212,23 @@ fn probe(ip: Ipv4Addr) -> Option<(Ipv4Addr, String)> {
 
 /// Scan the networks this laptop is on and let the user pick a router.
 pub fn discover(yes: bool) -> Result<String> {
-    let text = if cfg!(target_os = "macos") {
+    let out = if cfg!(target_os = "macos") {
         Command::new("ifconfig").output()
+    } else if cfg!(windows) {
+        Command::new("ipconfig").output()
     } else {
         Command::new("ip")
             .args(["-4", "-o", "addr", "show"])
             .output()
-    }
-    .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-    .unwrap_or_default();
-    let nets = parse_subnets(&text);
+    };
+    let text = out
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let nets = if cfg!(windows) {
+        parse_ipconfig(&text)
+    } else {
+        parse_subnets(&text)
+    };
     let label = if nets.is_empty() {
         "the local network".to_string()
     } else {
@@ -291,6 +333,15 @@ mod tests {
             vec![("192.168.80.0".parse().unwrap(), 24)]
         );
         assert_eq!(parse_subnets(lin), vec![("10.1.2.0".parse().unwrap(), 24)]);
+    }
+
+    #[test]
+    fn ipconfig_subnets() {
+        let win = "Ethernet adapter Ethernet:\r\n\r\n   IPv4 Address. . . . . . . . . . . : 192.168.1.50(Preferred)\r\n   Subnet Mask . . . . . . . . . . . : 255.255.255.0\r\n   Default Gateway . . . . . . . . . : 192.168.1.1\r\n\r\nWireless LAN adapter Wi-Fi:\r\n   Autoconfiguration IPv4 Address. . : 169.254.3.4\r\n   Subnet Mask . . . . . . . . . . . : 255.255.0.0\r\n";
+        assert_eq!(
+            parse_ipconfig(win),
+            vec![("192.168.1.0".parse().unwrap(), 24)]
+        );
     }
 
     #[test]

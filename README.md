@@ -7,10 +7,16 @@ A single static binary. No Python, no install. It talks to your router over SSH.
 
 ## Quick start
 
-On your laptop (macOS or Linux):
+**macOS / Linux**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mralinp/wrtforge/main/get.sh | sh
+```
+
+**Windows** (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/mralinp/wrtforge/main/get.ps1 | iex
 ```
 
 That downloads the latest release for your machine, checks its sha256, and runs it from a temporary folder. Nothing is installed. It scans your networks, lists the OpenWrt routers it finds and asks which one, asks how to log in, shows you the plan, and waits for your OK before touching anything.
@@ -21,7 +27,11 @@ Want to look first? Nothing is changed with `--dry-run`:
 curl -fsSL https://raw.githubusercontent.com/mralinp/wrtforge/main/get.sh | sh -s -- 192.168.1.1 --dry-run
 ```
 
-<sub>Rather not pipe to `sh`? Grab a binary from the [Releases](https://github.com/mralinp/wrtforge/releases) page (linux and macOS, x86_64 and arm64, each with a `.sha256`), or build it: `cargo install --git https://github.com/mralinp/wrtforge`. Read [get.sh](get.sh) first, it is short.</sub>
+```powershell
+$env:WRTFORGE_ARGS = '192.168.1.1 --dry-run'; irm https://raw.githubusercontent.com/mralinp/wrtforge/main/get.ps1 | iex
+```
+
+<sub>Rather not pipe to `sh`? Grab a binary from the [Releases](https://github.com/mralinp/wrtforge/releases) page (Linux and macOS on x86_64 and arm64, Windows on x86_64, each with a `.sha256`), or build it: `cargo install --git https://github.com/mralinp/wrtforge`. Read [get.sh](get.sh) first, it is short.</sub>
 
 ## Stay online while it works
 
@@ -100,7 +110,8 @@ wrtforge works on a router that already runs OpenWrt. The Google Wifi ships with
 ## Needs
 
 - A router that already runs OpenWrt (any build, rebrands such as PeDitXOS included) and can reach the internet.
-- `ssh` on your laptop. macOS or Linux (Windows' OpenSSH has no connection sharing, so it is not supported).
+- `ssh` on your laptop: macOS, Linux, or Windows 10/11 (the OpenSSH client is built in).
+- On Windows the OpenSSH client cannot share a connection, so with `password` or `copy-key` wrtforge installs your SSH key with the one password prompt and uses the key from then on. The "is my internet going through this router" check is skipped there.
 
 ## Good to know
 

@@ -1,41 +1,22 @@
 //! The router-changing steps: backup, keep-bundle, flash, recovery slot, Passwall2.
+use crate::fsx;
 use crate::owrt::{self, Device};
 use crate::ssh::Router;
 use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
-use std::io::Write;
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::Path;
-use std::process::Command;
 use std::time::{Duration, Instant};
 use std::{fs, thread};
 
-pub fn timestamp() -> String {
-    Command::new("date")
-        .arg("+%Y%m%d-%H%M%S")
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default()
-}
-
 fn save(dir: &Path, name: &str, data: &[u8]) -> Result<()> {
-    fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(dir.join(name))?
-        .write_all(data)?;
-    Ok(())
+    Ok(fsx::write_private(&dir.join(name), data)?)
 }
 
 /// Config, package list, and the small raw flash partitions (bootloader, env, Wi-Fi calibration), each verified by hash.
 /// Returns how many flash partitions were saved.
 pub fn backup(r: &Router, dir: &Path) -> Result<usize> {
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(dir)?;
+    fsx::private_dir(dir)?;
     r.sh("sysupgrade -b /tmp/wf-backup.tgz >/dev/null 2>&1")?;
     let cfg = r.get("/tmp/wf-backup.tgz")?;
     r.run("rm -f /tmp/wf-backup.tgz", None)?;
@@ -241,9 +222,9 @@ mod tests {
     #[ignore = "needs a live router"]
     fn backup_live() {
         let host = std::env::var("WRTFORGE_TEST_HOST").expect("set WRTFORGE_TEST_HOST");
-        let r = Router::new(&host, "root", 22, Auth::Key).unwrap();
+        let mut r = Router::new(&host, "root", 22, Auth::Key).unwrap();
         r.connect().unwrap();
-        let dir = std::env::temp_dir().join(format!("wf-test-{}", timestamp()));
+        let dir = std::env::temp_dir().join(format!("wf-test-{}", fsx::timestamp()));
         let n = backup(&r, &dir).unwrap();
         assert!(dir.join("config-backup.tar.gz").exists() && dir.join("device-info.txt").exists());
         println!("saved {n} partitions to {}", dir.display());

@@ -1,9 +1,10 @@
-//! SSH through the system `ssh` binary with one multiplexed connection, so a password is typed once at most.
+//! SSH through the system `ssh` binary. On unix one multiplexed connection means a password is typed once at most;
+//! Windows OpenSSH cannot multiplex, so there the key is installed with a single password prompt instead.
+use crate::fsx;
 use anyhow::{bail, Context, Result};
 use clap::ValueEnum;
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -29,6 +30,9 @@ impl Out {
     }
 }
 
+/// Windows OpenSSH has no ControlMaster.
+pub const MUX: bool = cfg!(not(windows));
+
 pub struct Router {
     pub host: String,
     pub user: String,
@@ -39,11 +43,14 @@ pub struct Router {
 
 impl Router {
     pub fn new(host: &str, user: &str, port: u16, auth: Auth) -> Result<Router> {
-        let dir = PathBuf::from(format!("/tmp/wf-{}", std::process::id()));
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&dir)?;
+        // short path: unix sockets are limited to ~100 chars
+        let base = if cfg!(windows) {
+            std::env::temp_dir()
+        } else {
+            PathBuf::from("/tmp")
+        };
+        let dir = base.join(format!("wf-{}", std::process::id()));
+        fsx::private_dir(&dir)?;
         Ok(Router {
             host: host.into(),
             user: user.into(),
@@ -55,7 +62,7 @@ impl Router {
 
     fn args(&self, batch: bool, mux: bool) -> Vec<String> {
         let mut a: Vec<String> = vec!["-p".into(), self.port.to_string()];
-        let d = self.dir.display();
+        let d = self.dir.display().to_string().replace('\\', "/");
         let mut o = vec![
             "StrictHostKeyChecking=accept-new".to_string(),
             format!("UserKnownHostsFile={d}/kh"),
@@ -63,7 +70,7 @@ impl Router {
             "ConnectTimeout=8".into(),
             "LogLevel=ERROR".into(),
         ];
-        if mux {
+        if mux && MUX {
             o.extend([
                 "ControlMaster=auto".to_string(),
                 format!("ControlPath={d}/c"),
@@ -84,13 +91,17 @@ impl Router {
     }
 
     /// Interactive on purpose: ssh itself asks for the password on the terminal.
-    pub fn connect(&self) -> Result<()> {
-        Command::new("ssh")
-            .args(self.args(self.batch, true))
-            .arg("true")
-            .stdout(Stdio::null())
-            .status()
-            .context("could not start ssh; is OpenSSH installed?")?;
+    pub fn connect(&mut self) -> Result<()> {
+        if !MUX && !self.batch {
+            self.login_and_install_key()?;
+        } else {
+            Command::new("ssh")
+                .args(self.args(self.batch, true))
+                .arg("true")
+                .stdout(Stdio::null())
+                .status()
+                .context("could not start ssh; is OpenSSH installed?")?;
+        }
         if !self.run("true", None)?.ok {
             bail!("could not log in to {}@{}", self.user, self.host);
         }
@@ -171,24 +182,27 @@ impl Router {
 
     /// Drop the multiplexed connection (it dies on its own when the router reboots).
     pub fn reset(&self) {
+        if !MUX {
+            return;
+        }
         let _ = Command::new("ssh")
             .args(self.args(false, true))
             .args(["-O", "exit"])
             .output();
     }
 
-    pub fn install_key(&mut self) -> Result<()> {
-        let home = std::env::var("HOME").context("HOME is not set")?;
-        let find = || {
-            ["id_ed25519.pub", "id_ecdsa.pub", "id_rsa.pub"]
-                .iter()
-                .map(|n| PathBuf::from(&home).join(".ssh").join(n))
-                .find(|p| p.exists())
-        };
-        let pubfile = match find() {
+    /// The user's public key, creating an ed25519 pair when there is none, as a router-side install script.
+    fn key_script() -> Result<String> {
+        let ssh_dir = fsx::home()?.join(".ssh");
+        let found = ["id_ed25519.pub", "id_ecdsa.pub", "id_rsa.pub"]
+            .iter()
+            .map(|n| ssh_dir.join(n))
+            .find(|p| p.exists());
+        let pubfile = match found {
             Some(p) => p,
             None => {
-                let key = PathBuf::from(&home).join(".ssh/id_ed25519");
+                let key = ssh_dir.join("id_ed25519");
+                fs::create_dir_all(&ssh_dir)?;
                 if !Command::new("ssh-keygen")
                     .args(["-q", "-t", "ed25519", "-N", ""])
                     .arg("-f")
@@ -198,19 +212,44 @@ impl Router {
                 {
                     bail!("ssh-keygen failed");
                 }
-                key.with_extension("pub")
+                ssh_dir.join("id_ed25519.pub")
             }
         };
         let key = fs::read_to_string(pubfile)?.trim().to_string();
-        self.sh(&format!(
+        Ok(format!(
             "mkdir -p /etc/dropbear; grep -qxF '{key}' /etc/dropbear/authorized_keys 2>/dev/null || echo '{key}' >> /etc/dropbear/authorized_keys; chmod 600 /etc/dropbear/authorized_keys"
-        ))?;
-        // prove key login works on a fresh connection, not through the password session
+        ))
+    }
+
+    /// Prove key login works on a fresh connection, not through the password session.
+    fn finish_key_login(&mut self) -> Result<()> {
         if !self.exec(self.args(true, false), "true", None)?.ok {
             bail!("installed the key but key login still fails");
         }
         self.batch = true;
         Ok(())
+    }
+
+    pub fn install_key(&mut self) -> Result<()> {
+        self.sh(&Self::key_script()?)?;
+        self.finish_key_login()
+    }
+
+    /// Windows: no connection sharing, so log in with the password exactly once (one prompt) and install the key.
+    fn login_and_install_key(&mut self) -> Result<()> {
+        let script = format!("set -e\n{}\n", Self::key_script()?);
+        let mut child = Command::new("ssh")
+            .args(self.args(false, false))
+            .arg("sh -s")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .context("could not start ssh; is OpenSSH installed?")?;
+        if let Some(mut w) = child.stdin.take() {
+            w.write_all(script.as_bytes())?;
+        }
+        child.wait()?;
+        self.finish_key_login()
     }
 }
 
