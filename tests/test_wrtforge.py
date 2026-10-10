@@ -24,6 +24,18 @@ class T(unittest.TestCase):
         self.assertTrue(f[1].endswith("/packages-25.12/aarch64_cortex-a53/passwall2/packages.adb"))
         self.assertFalse(w.feeds("opkg", "24.10", "x")[0].endswith(".adb"))
 
+    def test_network_verdict(self):
+        h = "192.168.1.1"
+        self.assertEqual(w.network_verdict(h, ("en5", None), ("en0", "10.0.0.1")), "split")
+        self.assertEqual(w.network_verdict(h, ("en0", None), ("en0", h)), "through")
+        self.assertEqual(w.network_verdict(h, ("en0", None), ("en0", "10.0.0.1")), "other")
+        self.assertEqual(w.network_verdict(h, (None, None), ("en0", "x")), "unknown")
+
+    def test_pick_factory(self):
+        p = {"profiles": {"g": {"supported_devices": ["google,wifi"], "images": [
+            {"type": "factory", "filesystem": "squashfs", "name": "f.bin"}]}}}
+        self.assertEqual(w.pick_image(p, "google,wifi", "factory")["name"], "f.bin")
+
 
 if __name__ == "__main__":
     unittest.main()

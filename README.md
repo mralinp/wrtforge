@@ -23,32 +23,45 @@ python3 <(curl -fsSL https://raw.githubusercontent.com/mralinp/wrtforge/main/wrt
 
 <sub>Prefer reading before running (you should): open [wrtforge.py](wrtforge.py), it is one file, standard library only. `curl -fsSL <url> | python3 -` works too.</sub>
 
+## Stay online while it works
+
+Connect your laptop to the router with a **LAN cable**, and keep **Wi-Fi (or any other connection) as your main internet**. The router can then reboot as often as it likes and you never lose your connection. wrtforge checks this first and warns you if your internet currently runs through the router being flashed.
+
 ## What you get
 
 | Step | What happens |
 |---|---|
+| **Network check** | Tells you whether the flash would cut your own internet, and how to avoid it. |
 | **Inspect** | Detects your exact board and OpenWrt target over SSH. |
+| **Backup & recovery** | *Before* anything is flashed: saves your config, package list, and the bootloader and Wi-Fi calibration partitions to `~/wrtforge-backups/` (every partition verified by hash). Dual-slot devices keep the old firmware as the recovery path; single-slot devices also get the official factory image saved for USB/TFTP recovery. |
 | **Flash** | Downloads the latest stable official image for that board, verifies its sha256, runs `sysupgrade`. |
 | **Keep** | Carries over only what you choose: SSH keys, root password, optionally LAN/Wi-Fi/DHCP and your Passwall2 config. |
-| **Recovery slot** | On dual-slot devices, writes the same official image to the second slot and verifies it by hash. |
 | **Passwall2** | Installs it from the official feeds (`apk` on 25.12+, `opkg` before), with `dnsmasq-full` and the dependencies it forgets (xray-core, tproxy modules…). |
+| **Recovery slot** | Once the new system works, replaces the old firmware in the second slot with the official image, verified by hash. |
 
 ```
   ▌wrtforge  v0.1.0
+
+  Network
+  ✔ two networks: router via en5, internet via en0. You will stay online.
 
   Inspect
   ✔ Linksys MX5300 (linksys,mx5300)
   ✔ OpenWrt 25.12.5  openwrt-…-sysupgrade.bin, 13.8 MB
 
-  Flash
+  Backup & recovery
+  ✔ Backup verified (~/wrtforge-backups/linksys_mx5300-…, 23 flash partitions)
   ✔ Downloaded and verified sha256 1d8895048d5a…
-  ✔ Router is back
 
-  Fallback slot
-  ✔ Fallback slot ready (alt_kernel, verified by hash)
+  Flash
+  ✔ Image accepted by sysupgrade; flashing and rebooting
+  ✔ Router is back
 
   Passwall2
   ✔ Passwall2 installed and running
+
+  Recovery slot
+  ✔ Fallback slot ready (alt_kernel, verified by hash)
 ```
 
 ## Logging in
@@ -64,10 +77,18 @@ python3 <(curl -fsSL https://raw.githubusercontent.com/mralinp/wrtforge/main/wrt
 ```
 wrtforge.py [host] [-u USER] [-p PORT] [--auth key|password|copy-key]
             [--version 25.12.5] [--no-passwall] [--no-fallback]
-            [--dry-run] [-y]
+            [--backup-dir DIR] [--dry-run] [-y [--go]]
 ```
 
-`-y` accepts every default, handy for scripts. Pass the address and `--auth` with it.
+`-y` accepts every default, handy for scripts. Pass the address and `--auth` with it. The final "flash now?" still needs a real yes, so scripts add `--go`.
+
+## Backups
+
+Each run writes `~/wrtforge-backups/<board>-<time>/` with `config-backup.tar.gz`, `device-info.txt` (release, partition table, package list) and raw copies of the small flash partitions (bootloader, U-Boot env, Wi-Fi calibration `art`). That calibration data cannot be recreated if lost. **The folder contains your Wi-Fi passwords and keys**, so it is created private (`700`); keep it that way.
+
+## Google Wifi (Gale) and other single-slot devices
+
+wrtforge works on a router that already runs OpenWrt. The Google Wifi ships with ChromeOS-based firmware, so its **first** OpenWrt install is a one-time USB-boot procedure from the [OpenWrt Google Wifi page](https://openwrt.org/toh/google/wifi). After that, wrtforge handles upgrades and Passwall2. It has a single eMMC firmware slot, so there is no second slot to fall back on: the recovery path is the backup plus the official factory image, which wrtforge saves next to it for re-doing the USB recovery. Not yet tested on Gale hardware.
 
 ## Needs
 
@@ -79,7 +100,7 @@ wrtforge.py [host] [-u USER] [-p PORT] [--auth key|password|copy-key]
 - Your Passwall2 nodes are not in this repo. They only move from the router's own `/etc/config/passwall2` to the new firmware, and only if you say yes.
 - Expect the router to be offline for about 5 to 15 minutes. The old settings are not kept except what you chose.
 - Host keys are trusted on first contact each run, which is fine on a LAN you control.
-- Image selection and Passwall2 are generic. The recovery-slot writer knows the Linksys MX layout (`alt_kernel` / `alt_rootfs`) and is skipped on other devices.
+- Image selection, backup and Passwall2 are generic. The second-slot writer knows the Linksys MX layout (`alt_kernel` / `alt_rootfs`) and is skipped on other devices.
 - Built from a manual migration of a Linksys MX5300 (PeDitXOS 24.10 to OpenWrt 25.12.5). Parts were re-checked on that router, but a full one-shot run is not yet verified. Run `--dry-run` first. A flash can brick a device; use at your own risk.
 
 <details>

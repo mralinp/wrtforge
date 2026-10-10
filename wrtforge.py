@@ -165,7 +165,7 @@ class Router:
         if self.run("true", check=False).returncode != 0:
             raise Fail("could not log in to %s@%s" % (self.user, self.host))
 
-    def run(self, cmd, stdin=None, check=True, timeout=300):
+    def run(self, cmd, stdin=None, check=True, timeout=300, raw=False):
         fh = open(stdin, "rb") if isinstance(stdin, str) else None
         try:
             p = subprocess.run(self._base() + [cmd], input=stdin if isinstance(stdin, bytes) else None,
@@ -175,7 +175,8 @@ class Router:
         finally:
             if fh:
                 fh.close()
-        p.stdout = p.stdout.decode(errors="replace")
+        if not raw:
+            p.stdout = p.stdout.decode(errors="replace")
         p.stderr = p.stderr.decode(errors="replace")
         if check and p.returncode:
             tail = (p.stderr + p.stdout).strip().splitlines()[-6:]
@@ -184,6 +185,9 @@ class Router:
 
     def sh(self, script, timeout=600):
         return self.run("sh -s", stdin=("set -e\n" + script).encode(), timeout=timeout).stdout
+
+    def get(self, remote):
+        return self.run("cat " + remote, raw=True, timeout=600).stdout
 
     def put(self, path, remote):
         self.run("cat > " + remote, stdin=path, timeout=600)
@@ -234,11 +238,11 @@ def series(release):
     return ".".join(release.split(".")[:2])
 
 
-def pick_image(profiles, board):
-    """Return the sysupgrade image dict for a board id like 'linksys,mx5300'."""
+def pick_image(profiles, board, kind="sysupgrade"):
+    """Return the image dict of this kind for a board id like 'linksys,mx5300'."""
     for key, p in profiles["profiles"].items():
         if board in p.get("supported_devices", []) or key == board.replace(",", "_"):
-            imgs = [i for i in p["images"] if i["type"] == "sysupgrade"]
+            imgs = [i for i in p["images"] if i["type"] == kind]
             imgs.sort(key=lambda i: i.get("filesystem") != "squashfs")
             if imgs:
                 return imgs[0]
@@ -248,6 +252,75 @@ def pick_image(profiles, board):
 def feeds(pm, ser, arch):
     base = "%s/releases/packages-%s/%s" % (PW, ser, arch)
     return ["%s/%s%s" % (base, n, "/packages.adb" if pm == "apk" else "") for n in ("passwall_packages", "passwall2")]
+
+
+def route_info(dest):
+    """(interface, next-hop) the laptop uses to reach dest, or (None, None)."""
+    try:
+        if sys.platform == "darwin":
+            out = subprocess.run(["route", "-n", "get", dest], capture_output=True, text=True, timeout=5).stdout
+            kv = dict(l.strip().split(": ", 1) for l in out.splitlines() if ": " in l)
+            return kv.get("interface"), kv.get("gateway")
+        t = subprocess.run(["ip", "route", "get", dest], capture_output=True, text=True, timeout=5).stdout.split()
+        return t[t.index("dev") + 1], (t[t.index("via") + 1] if "via" in t else None)
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return None, None
+
+
+def network_verdict(host, to_router, to_internet):
+    """'split' (cable to router, internet elsewhere), 'through' (internet rides the router), or 'unknown'."""
+    if not to_router[0] or not to_internet[0]:
+        return "unknown"
+    if to_internet[1] == host:
+        return "through"
+    return "split" if to_router[0] != to_internet[0] else "other"
+
+
+def network_check(host, a):
+    v = network_verdict(host, route_info(host), route_info("1.1.1.1"))
+    ri, di = route_info(host)[0], route_info("1.1.1.1")[0]
+    if v == "split":
+        print("  %s two networks: router via %s, internet via %s. You will stay online." % (green("✔"), ri, di))
+    elif v == "other":
+        print("  %s your internet does not go through this router (%s)" % (green("✔"), di))
+    elif v == "through":
+        warn("your internet currently goes THROUGH this router and will drop while it flashes")
+        info("tip: plug a LAN cable from your laptop into the router for this session and keep Wi-Fi")
+        info("(or any other connection) as your main internet, then nothing gets cut off.")
+        if not a.dry_run and not confirm("Continue on this connection anyway?", False):
+            raise Fail("cancelled; connect a second network and run again")
+
+
+def backup(r, d, bdir):
+    """Everything needed to rebuild: config, package list, small raw flash partitions (bootloader, calibration)."""
+    os.makedirs(bdir, mode=0o700)
+    r.sh("sysupgrade -b /tmp/wf-backup.tgz >/dev/null 2>&1")
+    files = {"config-backup.tar.gz": r.get("/tmp/wf-backup.tgz")}
+    r.run("rm -f /tmp/wf-backup.tgz", check=False)
+    txt = r.run("cat /etc/openwrt_release /etc/board.json /proc/mtd /proc/partitions 2>/dev/null; echo '--- packages'; "
+                "(apk list -I 2>/dev/null || opkg list-installed 2>/dev/null); echo '--- u-boot env'; fw_printenv 2>/dev/null",
+                check=False).stdout
+    files["device-info.txt"] = txt.encode()
+    n = 0
+    sizes = r.run("awk 'NR>1{gsub(/[:\"]/,\"\"); print substr($1,4), $2, $4}' /proc/mtd", check=False).stdout.split("\n")
+    small = [(p[0], p[2]) for p in (l.split() for l in sizes if l.strip())
+             if len(p) == 3 and int(p[1], 16) <= 4 << 20]
+    if small:
+        want = dict(l.split() for l in r.run("for n in %s; do echo $n $(cat /dev/mtd$n | sha256sum | cut -d' ' -f1); done"
+                                              % " ".join(i for i, _ in small)).stdout.splitlines())
+        for i, name in small:
+            blob = r.get("/dev/mtd" + i)
+            if hashlib.sha256(blob).hexdigest() != want.get(i):
+                raise Fail("backup of flash partition %s did not verify" % name)
+            files["mtd%s-%s.bin" % (i, name.replace(":", "_"))] = blob
+            n += 1
+    elif r.run("[ -e /dev/mmcblk0 ]", check=False).returncode == 0:  # eMMC: partition table + boot area
+        files["mmcblk0-first-1MiB.bin"] = r.run("dd if=/dev/mmcblk0 bs=1M count=1 2>/dev/null", raw=True).stdout
+    for name, blob in files.items():
+        with open(os.path.join(bdir, name), "wb") as f:
+            os.fchmod(f.fileno(), 0o600)
+            f.write(blob)
+    return n
 
 
 # ───────────────────────────── steps ─────────────────────────────
@@ -411,8 +484,10 @@ def main(argv=None):
     ap.add_argument("--auth", choices=["key", "password", "copy-key"], help="how to log in (asked if omitted)")
     ap.add_argument("--version", dest="ver", help="OpenWrt version (default: latest stable)")
     ap.add_argument("--no-passwall", action="store_true")
-    ap.add_argument("--no-fallback", action="store_true", help="do not provision the second firmware slot")
+    ap.add_argument("--no-fallback", action="store_true", help="keep the old firmware in the second slot (skip the final refresh)")
     ap.add_argument("--dry-run", action="store_true", help="inspect and plan only; change nothing")
+    ap.add_argument("--go", action="store_true", help="with -y: also answer yes to the final 'flash now?'")
+    ap.add_argument("--backup-dir", default=os.path.expanduser("~/wrtforge-backups"))
     ap.add_argument("-y", "--yes", action="store_true", help="accept defaults, no questions")
     a = ap.parse_args(argv)
     ARGS.yes = a.yes
@@ -439,6 +514,9 @@ def main(argv=None):
 
 
 def run(a, r, host):
+    head("Network")
+    network_check(host, a)
+
     head("Connect")
     if r.auth != "key":
         info("ssh will ask for the password for %s@%s" % (r.user, host))
@@ -467,6 +545,10 @@ def run(a, r, host):
         raise Fail("not enough free RAM on the router to stage the image")
 
     slot = d["dual"] and not a.no_fallback
+    recovery = ("old firmware stays in the other slot until the new one is verified (bootloader falls back to it)"
+                if d["dual"] else "backup + official factory image saved here for USB/TFTP recovery")
+    bdir = os.path.join(a.backup_dir, "%s-%s" % (d["board"].replace(",", "_"), time.strftime("%Y%m%d-%H%M%S")))
+
     carry_net = carry_pw = False
     if not a.dry_run:
         head("Plan")
@@ -474,24 +556,42 @@ def run(a, r, host):
         if d["had_pw2"] and not a.no_passwall:
             carry_pw = confirm("Carry over your existing Passwall2 config?", True)
     print()
-    for line in ["flash OpenWrt %s (currently %s)" % (ver, d["release"]),
+    for line in ["back up config, package list and bootloader/calibration partitions to " + bdir,
+                 "recovery: " + recovery,
+                 "flash OpenWrt %s (currently %s)" % (ver, d["release"]),
                  "keep: SSH keys + root password%s%s" % (", network/Wi-Fi" if carry_net else "", ", Passwall2" if carry_pw else ""),
-                 "fallback slot: " + ("write the same official image to the second slot" if slot else "skipped"),
-                 "Passwall2: " + ("install from official feeds (%s)" % d["pm"] if not a.no_passwall else "skipped")]:
+                 "Passwall2: " + ("install from official feeds (%s)" % d["pm"] if not a.no_passwall else "skipped"),
+                 "recovery slot: " + ("afterwards replace the old firmware with the official image" if slot else "n/a")]:
         print("    " + dim("•") + " " + line)
     if a.dry_run:
         print("\n  " + green("dry run: nothing changed") + "\n")
         return
-    warn("the router reboots and your internet through it drops for ~5-15 minutes")
-    if not confirm("Go ahead?", False):
+    warn("the router reboots and goes offline for ~5-15 minutes")
+    if not (a.go or confirm("Go ahead?", False)):
         raise Fail("cancelled; the router was not changed")
 
-    head("Flash")
+    head("Backup & recovery")
+    with Step("Backing up the router to your laptop") as s:
+        n = backup(r, d, bdir)
+        s.done("Backup verified %s" % dim("(%s, %d flash partitions)" % (bdir, n)))
+    info("contains your Wi-Fi passwords and keys; keep it private")
     dest = os.path.join(CACHE, img["name"])
-    url = "%s/releases/%s/targets/%s/%s" % (DL, ver, d["target"], img["name"])
+    url = "%s/releases/%s/targets/%s/" % (DL, ver, d["target"])
     with Step("Downloading %s" % img["name"]) as s:
-        download(url, dest, img["sha256"])
+        download(url + img["name"], dest, img["sha256"])
         s.done("Downloaded and verified sha256 %s…" % img["sha256"][:12])
+    if not d["dual"]:
+        fac = pick_image(prof, d["board"], "factory")
+        if fac:
+            with Step("Saving the factory image for recovery") as s:
+                download(url + fac["name"], os.path.join(bdir, fac["name"]), fac["sha256"])
+                s.done("Recovery image saved: %s" % fac["name"])
+        else:
+            warn("no factory image published for this board; rely on the vendor recovery method")
+    else:
+        info("recovery path: %s" % recovery)
+
+    head("Flash")
     after = host
     if not carry_net:
         after = ask("Router address after flashing", "192.168.1.1")
@@ -510,13 +610,6 @@ def run(a, r, host):
         raise Fail("router reports %s after flashing, expected %s" % (now["release"], ver))
     info("now running %s %s" % (now["distro"], now["release"]))
 
-    if slot:
-        head("Fallback slot")
-        with Step("Writing official OpenWrt to the second slot") as s:
-            k = fallback(r, dest)
-            s.done("Fallback slot ready %s" % dim("(%s, verified by hash)" % k))
-        info("it boots automatically if the main slot fails; stock settings, 192.168.1.1")
-
     if not a.no_passwall:
         head("Passwall2")
         with Step("Installing Passwall2 from the official feeds") as s:
@@ -525,7 +618,16 @@ def run(a, r, host):
         if "RUNNING" not in res:
             info("open LuCI -> Services -> Passwall 2, add your node, enable it")
 
-    print("\n  " + green("✔ done") + "  " + dim("LuCI: http://%s" % r.host) + "\n")
+    if slot:
+        head("Recovery slot")
+        info("the new system works, so the old firmware in the other slot is no longer needed")
+        if confirm("Replace it with the official OpenWrt image (a clean, fresh fallback)?", True):
+            with Step("Writing official OpenWrt to the second slot") as s:
+                k = fallback(r, dest)
+                s.done("Fallback slot ready %s" % dim("(%s, verified by hash)" % k))
+            info("boots automatically if the main slot ever fails; stock settings, 192.168.1.1")
+
+    print("\n  " + green("✔ done") + "  " + dim("LuCI: http://%s   backup: %s" % (r.host, bdir)) + "\n")
 
 
 if __name__ == "__main__":
