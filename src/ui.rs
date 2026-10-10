@@ -1,7 +1,7 @@
 //! Terminal UI: banner, spinner steps, prompts. `--yes` answers every prompt with its default.
 use anyhow::{bail, Result};
 use console::{style, Term};
-use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
+use dialoguer::{theme::ColorfulTheme, Confirm, Input, MultiSelect, Select};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -73,6 +73,10 @@ impl Step {
     pub fn done(self, msg: &str) {
         self.end(style("✔").green(), msg)
     }
+
+    pub fn warn(self, msg: &str) {
+        self.end(style("!").yellow(), msg)
+    }
 }
 
 impl Drop for Step {
@@ -115,5 +119,22 @@ pub fn choose(q: &str, items: &[String], default: usize) -> Result<usize> {
         .with_prompt(q)
         .items(items)
         .default(default)
+        .interact()?)
+}
+
+/// Multi-select; returns the chosen indexes. With `--yes` it returns the pre-ticked ones.
+pub fn multi(q: &str, items: &[String], defaults: &[bool]) -> Result<Vec<usize>> {
+    if yes() {
+        return Ok(defaults
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| **d)
+            .map(|(i, _)| i)
+            .collect());
+    }
+    Ok(MultiSelect::with_theme(&ColorfulTheme::default())
+        .with_prompt(q)
+        .items(items)
+        .defaults(defaults)
         .interact()?)
 }
