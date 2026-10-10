@@ -169,6 +169,8 @@ Without a file or server, an extra is only installed and you finish it in LuCI. 
 
 Compare routers, or one router with and without Passwall2, using the same test:
 
+Pick **Benchmark** in the menu that appears after you choose the router, or skip the menu:
+
 ```bash
 wrtforge 192.168.1.1 --bench --label mx5300-passwall-off
 ```

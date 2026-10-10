@@ -116,9 +116,21 @@ fn run(cli: Cli) -> Result<()> {
     };
     let mut r = Router::new(&host, &cli.user, cli.port, auth)?;
 
-    ui::head("Network");
-    if !cli.bench && !net::network_check(&host, cli.dry_run)? {
-        bail!("cancelled; connect a second network and run again");
+    let bench = cli.bench
+        || (!cli.dry_run && {
+            let items = [
+                "Forge: flash OpenWrt and set up extras",
+                "Benchmark: measure speed and CPU through this router",
+            ]
+            .map(String::from);
+            ui::choose("What do you want to do?", &items, 0)? == 1
+        });
+
+    if !bench {
+        ui::head("Network");
+        if !net::network_check(&host, cli.dry_run)? {
+            bail!("cancelled; connect a second network and run again");
+        }
     }
 
     ui::head("Connect");
@@ -150,12 +162,12 @@ fn run(cli: Cli) -> Result<()> {
         "running {} {}   {} / {}",
         d.distro, d.release, d.target, d.arch
     ));
-    if cli.bench {
+    if bench {
         ui::head("Benchmark");
         return bench::run(
             &r,
             &d,
-            &cli.label,
+            &ui::ask("Name for this run", &cli.label)?,
             cli.rounds.max(1),
             cli.secs.max(1),
             &cli.bench_out,
