@@ -11,8 +11,9 @@ D=bench-server
 mkdir -p "$D" && cd "$D"
 for t in xray iperf3 openssl; do command -v $t >/dev/null || { echo "missing: $t"; exit 1; }; done
 
-UUID=$(cat uuid 2>/dev/null || { xray uuid | tee uuid; })
-SSPASS=$(cat sspass 2>/dev/null || { openssl rand -base64 16 | tee sspass; })
+[ -s uuid ] || xray uuid >uuid
+[ -s sspass ] || openssl rand -base64 16 >sspass
+UUID=$(cat uuid); SSPASS=$(cat sspass)
 [ -f cert.pem ] || openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj /CN=wrtbench \
   -keyout key.pem -out cert.pem 2>/dev/null
 
