@@ -1,27 +1,27 @@
 <h1 align="center">▌wrtforge</h1>
 
 <p align="center"><b>Paste one command. Get a clean, official OpenWrt, Passwall2 and a recovery slot.</b><br>
-No install, no dependencies. It talks to your router over SSH.</p>
+A single static binary. No Python, no install. It talks to your router over SSH.</p>
 
 ---
 
 ## Quick start
 
-On your laptop (macOS or Linux, Python 3 is already there):
+On your laptop (macOS or Linux):
 
 ```bash
-python3 <(curl -fsSL https://raw.githubusercontent.com/mralinp/wrtforge/main/wrtforge.py)
+curl -fsSL https://raw.githubusercontent.com/mralinp/wrtforge/main/get.sh | sh
 ```
 
-That is it. It scans the networks your laptop is on, lists the OpenWrt routers it finds and asks which one, asks how to log in, shows you the plan, and waits for your OK before touching anything.
+That downloads the latest release for your machine, checks its sha256, and runs it from a temporary folder. Nothing is installed. It scans your networks, lists the OpenWrt routers it finds and asks which one, asks how to log in, shows you the plan, and waits for your OK before touching anything.
 
-Want to look first? Add `--dry-run` and nothing is changed:
+Want to look first? Nothing is changed with `--dry-run`:
 
 ```bash
-python3 <(curl -fsSL https://raw.githubusercontent.com/mralinp/wrtforge/main/wrtforge.py) 192.168.1.1 --dry-run
+curl -fsSL https://raw.githubusercontent.com/mralinp/wrtforge/main/get.sh | sh -s -- 192.168.1.1 --dry-run
 ```
 
-<sub>Prefer reading before running (you should): open [wrtforge.py](wrtforge.py), it is one file, standard library only. `curl -fsSL <url> | python3 -` works too.</sub>
+<sub>Rather not pipe to `sh`? Grab a binary from the [Releases](https://github.com/mralinp/wrtforge/releases) page (linux and macOS, x86_64 and arm64, each with a `.sha256`), or build it: `cargo install --git https://github.com/mralinp/wrtforge`. Read [get.sh](get.sh) first, it is short.</sub>
 
 ## Stay online while it works
 
@@ -45,8 +45,9 @@ Connect your laptop to the router with a **LAN cable**, and keep **Wi-Fi (or any
 
   ✔ Found 2 OpenWrt routers
   ? Which router should I set up?
-    1. 192.168.1.1  OpenWrt (LuCI)  ← your gateway
-    2. 192.168.1.2  likely OpenWrt (dropbear SSH)
+  ❯ 192.168.1.1  OpenWrt (LuCI)  ← your gateway
+    192.168.1.2  likely OpenWrt (dropbear SSH)
+    Enter an address manually
 
   Network
   ✔ two networks: router via en5, internet via en0. You will stay online.
@@ -81,9 +82,9 @@ Connect your laptop to the router with a **LAN cable**, and keep **Wi-Fi (or any
 ## Options
 
 ```
-wrtforge.py [host] [--no-scan] [-u USER] [-p PORT] [--auth key|password|copy-key]
-            [--version 25.12.5] [--no-passwall] [--no-fallback]
-            [--backup-dir DIR] [--dry-run] [-y [--go]]
+wrtforge [HOST] [--no-scan] [-u USER] [-p PORT] [--auth key|password|copy-key]
+         [--release 25.12.5] [--no-passwall] [--no-fallback]
+         [--backup-dir DIR] [--dry-run] [-y [--go]]
 ```
 
 `-y` accepts every default, handy for scripts. Pass the address and `--auth` with it. The final "flash now?" still needs a real yes, so scripts add `--go`.
@@ -98,8 +99,8 @@ wrtforge works on a router that already runs OpenWrt. The Google Wifi ships with
 
 ## Needs
 
-- The router already runs OpenWrt (any build, rebrands such as PeDitXOS included) and can reach the internet.
-- `python3` (3.8+) and `ssh` on your laptop.
+- A router that already runs OpenWrt (any build, rebrands such as PeDitXOS included) and can reach the internet.
+- `ssh` on your laptop. macOS or Linux (Windows' OpenSSH has no connection sharing, so it is not supported).
 
 ## Good to know
 
@@ -120,10 +121,13 @@ wrtforge works on a router that already runs OpenWrt. The Google Wifi ships with
 
 </details>
 
-## Develop
+## Contributing
+
+Every task is an issue (with labels), a branch off `main`, and a PR into `main`; merging to `main` bumps the version and publishes a release with a changelog from the PR titles. The rules are in [CLAUDE.md](CLAUDE.md).
 
 ```bash
-python3 -m unittest discover -s tests
+cargo fmt --all && cargo clippy --all-targets -- -D warnings && cargo test
+WRTFORGE_TEST_HOST=192.168.1.1 cargo test -- --ignored   # live backup test, needs a router
 ```
 
 MIT licensed.
