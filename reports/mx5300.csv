@@ -1,0 +1,5 @@
+router,openwrt,scenario,down_mbps,up_mbps,cpu_avg_down,cpu_maxcore_down,cpu_avg_up,cpu_maxcore_up
+Linksys MX5300,25.12.5,vless-tcp,94,94,44,55,8,11
+Linksys MX5300,25.12.5,vless-tls,94,94,37,47,10,14
+Linksys MX5300,25.12.5,ss-aes,94,93,36,47,9,14
+Linksys MX5300,25.12.5,ss-chacha,94,93,39,52,12,17
