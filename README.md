@@ -1,7 +1,31 @@
 <h1 align="center">▌wrtforge</h1>
 
-<p align="center"><b>Paste one command. Get a clean, official OpenWrt, Passwall2 and a recovery slot.</b><br>
+<p align="center"><b>Paste one command. Get a clean, official OpenWrt, your choice of Passwall2 / WireGuard / OpenVPN / SSH tunnel, and a recovery slot.</b><br>
 A single static binary. No Python, no install. It talks to your router over SSH.</p>
+
+<p align="center">
+  <a href="https://github.com/mralinp/wrtforge/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/mralinp/wrtforge/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  <a href="https://github.com/mralinp/wrtforge/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/mralinp/wrtforge?label=release&color=2ea44f"></a>
+  <a href="https://github.com/mralinp/wrtforge/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/mralinp/wrtforge/total?label=downloads&color=0a7bbb"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/github/license/mralinp/wrtforge?color=blue"></a>
+  <a href="https://github.com/mralinp/wrtforge/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/mralinp/wrtforge?style=flat&color=e3b341"></a>
+  <br>
+  <img alt="Platforms" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-444?logo=gnometerminal&logoColor=white">
+  <img alt="Architectures" src="https://img.shields.io/badge/arch-x86__64%20%7C%20arm64-444">
+  <img alt="OpenWrt" src="https://img.shields.io/badge/OpenWrt-24.10%20%7C%2025.12-00b5e2">
+  <img alt="Built with Rust" src="https://img.shields.io/badge/built%20with-Rust-dea584?logo=rust&logoColor=white">
+  <img alt="Static binary" src="https://img.shields.io/badge/binary-static%2C%20no%20install-success">
+</p>
+
+---
+
+## Why wrtforge
+
+- **One command, nothing to install.** A static binary that scans your network, finds your OpenWrt routers and walks you through it.
+- **Safety first.** A verified backup (including Wi-Fi calibration data) and a recovery path come *before* the flash. VPN tunnels are checked and rolled back if they do not come up, so your LAN is never left offline.
+- **Official sources only.** Images from `downloads.openwrt.org` checked against their sha256; Passwall2 from its official feeds.
+- **Your choice of tunnel.** Passwall2, WireGuard, OpenVPN or an SSH SOCKS tunnel, alone or together.
+- **Yours to inspect.** One small Rust program, MIT licensed, with a `--dry-run` that changes nothing.
 
 ---
 
@@ -32,6 +56,32 @@ $env:WRTFORGE_ARGS = '192.168.1.1 --dry-run'; irm https://raw.githubusercontent.
 ```
 
 <sub>Rather not pipe to `sh`? Grab a binary from the [Releases](https://github.com/mralinp/wrtforge/releases) page (Linux and macOS on x86_64 and arm64, Windows on x86_64, each with a `.sha256`), or build it: `cargo install --git https://github.com/mralinp/wrtforge`. Read [get.sh](get.sh) first, it is short.</sub>
+
+## Downloads
+
+Latest release: [**github.com/mralinp/wrtforge/releases/latest**](https://github.com/mralinp/wrtforge/releases/latest). Every file has a matching `.sha256`.
+
+| Platform | Architecture | Download |
+|---|---|---|
+| Linux (static) | x86_64 | [`wrtforge-x86_64-unknown-linux-musl.tar.gz`](https://github.com/mralinp/wrtforge/releases/latest/download/wrtforge-x86_64-unknown-linux-musl.tar.gz) |
+| Linux (static) | arm64 | [`wrtforge-aarch64-unknown-linux-musl.tar.gz`](https://github.com/mralinp/wrtforge/releases/latest/download/wrtforge-aarch64-unknown-linux-musl.tar.gz) |
+| macOS | Apple Silicon | [`wrtforge-aarch64-apple-darwin.tar.gz`](https://github.com/mralinp/wrtforge/releases/latest/download/wrtforge-aarch64-apple-darwin.tar.gz) |
+| macOS | Intel | [`wrtforge-x86_64-apple-darwin.tar.gz`](https://github.com/mralinp/wrtforge/releases/latest/download/wrtforge-x86_64-apple-darwin.tar.gz) |
+| Windows | x86_64 | [`wrtforge-x86_64-pc-windows-msvc.zip`](https://github.com/mralinp/wrtforge/releases/latest/download/wrtforge-x86_64-pc-windows-msvc.zip) |
+
+Unpack it and run `./wrtforge` (`wrtforge.exe` on Windows). Verify with `shasum -a 256 -c wrtforge-*.sha256`.
+
+## How it works
+
+```mermaid
+flowchart LR
+    A[Scan the LAN] --> B[Check your own<br/>connection stays up]
+    B --> C[Inspect the router]
+    C --> D[Verified backup +<br/>recovery path]
+    D --> E[Flash official<br/>OpenWrt]
+    E --> F[Extras:<br/>Passwall2 / WireGuard /<br/>OpenVPN / SSH tunnel]
+    F --> G[Fresh fallback<br/>slot]
+```
 
 ## Stay online while it works
 
