@@ -177,6 +177,19 @@ wrtforge 192.168.1.1 --bench --label mx5300-baseline
 
 It runs the test **on the router** over SSH (its own `uclient-fetch` against Cloudflare's public speed endpoints; nothing is installed), so it works from any machine that can reach the router. It measures download, upload and HTTPS latency, samples the router's CPU during each transfer, and prints a markdown row. Results are appended to `wrtforge-bench.csv` (`--bench-out`). The median of `--rounds` (default 3) transfers of `--secs` (default 10) seconds is reported. Note the transfer itself uses router CPU, and router-originated traffic only goes through Passwall2 if its "localhost proxy" option is on.
 
+### Full-potential benchmark (`bench/`)
+
+Measures the router's own ceiling, with no VPS, Cloudflare or ISP in the path: a local Xray server, `iperf3 -P 8` pushed *through* the router's Passwall2, and per-core router CPU. Needs `xray` and `iperf3` on your machine.
+
+Cabling: router WAN to the switch/ISP router; your laptop on that network (Wi-Fi is fine, Ethernet is better) as the **server**, and a LAN cable from the laptop to the router as the **client**. A second machine for the server also enables the plain-NAT baseline.
+
+```bash
+bench/server.sh 192.168.70.50                       # laptop's IP on the WAN side; leave running
+bench/run.sh 192.168.80.1 bench-server/params.env   # router LAN IP; 30 s x 3 reps x all scenarios
+```
+
+Scenarios: `nat`, `vless-tcp`, `vless-tls`, `ss-aes`, `ss-chacha`. Results go to `wrtforge-bench.csv`. The router's Passwall2 config is backed up first and restored on exit. If throughput plateaus while no core is near 100%, the bottleneck is your server link or laptop, not the router.
+
 ## Backups
 
 Each run writes `~/wrtforge-backups/<board>-<time>/` with `config-backup.tar.gz`, `device-info.txt` (release, partition table, package list) and raw copies of the small flash partitions (bootloader, U-Boot env, Wi-Fi calibration `art`). That calibration data cannot be recreated if lost. **The folder contains your Wi-Fi passwords and keys**, so it is created private (`700`); keep it that way.
