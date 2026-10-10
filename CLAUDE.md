@@ -6,11 +6,16 @@ One static Rust binary that forges a clean, official OpenWrt (+ Passwall2, recov
 
 We follow gitflow, trimmed down: **`main` is the only long-lived branch. There is no `develop`.**
 
-1. **Every task starts with a GitHub issue.** No issue, no work. Describe why, scope and "done when".
+1. **Every task starts with a GitHub issue.** No issue, no work. Describe why, scope and "done when", and **give it labels** (at least one type label, plus any of `rust`, `ci`, `router`). The PR carries the same labels.
 2. **Every task gets its own branch off `main`**, named `<type>/<issue#>-<short-slug>`, e.g. `feat/12-sd-card-backup`, `fix/15-ssh-timeout`, `docs/20-readme`.
 3. **Every task ends in a pull request into `main`** that links the issue (`Closes #12`). Never push straight to `main`. Keep PRs small and single-purpose.
 4. CI must be green before merge. Merge with **squash**, and make the squash title a Conventional Commit (it feeds the changelog and the version).
 5. Merging to `main` **auto-bumps the version and publishes a release**. Do not edit versions or tags by hand.
+
+### Labels
+
+Type (maps to the commit type): `enhancement` (feat), `bug` (fix), `documentation` (docs), `refactor`, `chore`, `ci`, `breaking`.
+Area: `rust`, `router` (device-specific behaviour). Create a missing label rather than leaving an issue unlabeled.
 
 ## Commits and versions
 
